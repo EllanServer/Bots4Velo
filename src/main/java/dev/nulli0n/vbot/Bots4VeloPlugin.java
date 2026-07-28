@@ -541,9 +541,23 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             logger.warn("Presence rule {} refers to unknown server {}", rule.id(), rule.server());
             return;
         }
+        // A registered Velocity backend can still be down for maintenance.
+        // Wait for a successful ping instead of repeatedly moving bots into a
+        // failed connection. The next scheduled tick resumes assignments, and
+        // BotManager's shared connection limiter batches their re-entry.
+        backend.get().ping().whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                logger.debug("Presence rule {} is waiting for backend {} to recover", rule.id(), rule.server());
+                return;
+            }
+            applyPresenceRuleToHealthyBackend(rule, backend.get());
+        });
+    }
+
+    private void applyPresenceRuleToHealthyBackend(BotPluginConfig.PresenceRule rule, RegisteredServer backend) {
         java.util.Set<String> botNames = manager().snapshots().stream()
             .map(snapshot -> snapshot.username().toLowerCase(java.util.Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
-        long humans = backend.get().getPlayersConnected().stream()
+        long humans = backend.getPlayersConnected().stream()
             .filter(player -> !botNames.contains(player.getUsername().toLowerCase(java.util.Locale.ROOT))).count();
         int desired = humans <= rule.maximumHumans() ? rule.minimumBots() : 0;
         List<BotSession> candidates = selectBots(rule.selector());
@@ -551,7 +565,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             BotSession session = candidates.get(index);
             if (index < desired) {
                 manager().start(session.definition().id());
-                switchBotServer(session.definition().id(), backend.get().getServerInfo().getName());
+                switchBotServer(session.definition().id(), backend.getServerInfo().getName());
             }
             else {
                 manager().stop(session.definition().id());

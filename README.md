@@ -224,7 +224,8 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 
 `runtime.presence-rules` 用于空服保活和动态缩容：当某后端的人类玩家数不高于
 `maximum-humans` 时，插件会从 `selector` 中启动最多 `minimum-bots` 个机器人并切至该后端；
-人数上升后则停止这些明确由规则管理的机器人。后端不可用时，已有的重连与切服重试策略继续生效。
+人数上升后则停止这些明确由规则管理的机器人。规则会先 ping 后端；维护期间 ping 失败时等待，后端
+恢复后再按 `spawn-interval-ms` 的连接限速分批重新进入。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
 主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用
