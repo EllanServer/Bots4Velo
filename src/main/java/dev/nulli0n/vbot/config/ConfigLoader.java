@@ -11,6 +11,7 @@ import dev.nulli0n.vbot.config.BotPluginConfig.ReconnectConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.ResourcePackMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.RuntimeConfig;
 import dev.nulli0n.vbot.protocol.ProtocolSelection;
+import dev.nulli0n.vbot.schedule.DailySchedule;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -20,9 +21,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -370,7 +369,7 @@ public final class ConfigLoader {
             String timezone = text(schedule, "timezone", "UTC");
             if (!at.isBlank()) {
                 try {
-                    LocalTime.parse(at, DateTimeFormatter.ofPattern("HH:mm"));
+                    DailySchedule.parseTime(at);
                 }
                 catch (DateTimeParseException exception) {
                     throw new IllegalArgumentException("runtime.schedules." + id + ".at must use HH:mm", exception);

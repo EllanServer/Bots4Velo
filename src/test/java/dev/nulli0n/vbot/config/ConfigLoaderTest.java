@@ -332,6 +332,17 @@ class ConfigLoaderTest {
             """))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("invalid-zone.timezone is invalid");
+
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              schedules:
+                - id: midnight-overflow
+                  action: start
+                  selector: all
+                  at: "24:00"
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("midnight-overflow.at must use HH:mm");
     }
 
     private static BotPluginConfig parse(String yaml) {
