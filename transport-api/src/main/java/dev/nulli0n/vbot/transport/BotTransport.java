@@ -31,6 +31,11 @@ public interface BotTransport extends AutoCloseable {
         return false;
     }
 
+    /** Updates the client sneaking/shift state when supported by the protocol. */
+    default boolean setSneaking(boolean sneaking) {
+        return false;
+    }
+
     BotPosition position();
 
     @Override

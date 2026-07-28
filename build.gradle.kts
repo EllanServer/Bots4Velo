@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "dev.nulli0n.bots4velo"
-version = providers.gradleProperty("pluginVersion").orElse("2.1.0").get()
+version = providers.gradleProperty("pluginVersion").orElse("2.2.0").get()
 
 java {
     toolchain {

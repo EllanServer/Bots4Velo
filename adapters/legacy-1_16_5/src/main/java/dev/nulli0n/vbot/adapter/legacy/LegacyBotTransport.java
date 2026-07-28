@@ -8,6 +8,7 @@ import com.github.steveice10.mc.protocol.data.game.MessageType;
 import com.github.steveice10.mc.protocol.data.game.ResourcePackStatus;
 import com.github.steveice10.mc.protocol.data.game.entity.player.HandPreference;
 import com.github.steveice10.mc.protocol.data.game.entity.player.Hand;
+import com.github.steveice10.mc.protocol.data.game.entity.player.PlayerState;
 import com.github.steveice10.mc.protocol.data.game.entity.player.PositionElement;
 import com.github.steveice10.mc.protocol.data.game.setting.ChatVisibility;
 import com.github.steveice10.mc.protocol.data.game.setting.SkinPart;
@@ -17,6 +18,7 @@ import com.github.steveice10.mc.protocol.packet.ingame.client.ClientResourcePack
 import com.github.steveice10.mc.protocol.packet.ingame.client.ClientSettingsPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerPositionRotationPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerSwingArmPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerStatePacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.world.ClientTeleportConfirmPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerChatPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerJoinGamePacket;
@@ -157,6 +159,17 @@ final class LegacyBotTransport implements BotTransport {
             active.send(new ClientPlayerPositionRotationPacket(false, x, y, z, yaw, pitch));
             return true;
         }
+    }
+
+    @Override
+    public boolean setSneaking(boolean sneaking) {
+        Session active = playableSession();
+        if (active == null) {
+            return false;
+        }
+        active.send(new ClientPlayerStatePacket(0,
+            sneaking ? PlayerState.START_SNEAKING : PlayerState.STOP_SNEAKING));
+        return true;
     }
 
     @Override

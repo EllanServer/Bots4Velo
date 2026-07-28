@@ -48,6 +48,7 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.title.Clien
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatCommandPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundClientCommandPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundAcceptTeleportationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundPlayerInputPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundSwingPacket;
 import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundLoginFinishedPacket;
@@ -205,6 +206,16 @@ final class ModernBotTransport implements BotTransport {
             active.send(new ServerboundMovePlayerPosRotPacket(false, false, x, y, z, yaw, pitch));
             return true;
         }
+    }
+
+    @Override
+    public boolean setSneaking(boolean sneaking) {
+        ClientSession active = playableSession();
+        if (active == null) {
+            return false;
+        }
+        active.send(new ServerboundPlayerInputPacket(false, false, false, false, false, sneaking, false));
+        return true;
     }
 
     @Override

@@ -56,7 +56,7 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 .\gradlew.bat clean check shadowJar
 ```
 
-默认产物位于 `build/libs/bots4velo-2.1.0.jar`；也可以通过
+默认产物位于 `build/libs/bots4velo-2.2.0.jar`；也可以通过
 `-PpluginVersion=<version>` 覆盖构建版本。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
 只需把这个 JAR 放入 Velocity 的 `plugins` 目录。首次启动会生成
@@ -69,16 +69,16 @@ MCProtocolLib 及其传递依赖冲突的设计结果。
 
 每次功能版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
 GitHub Release（附带 JAR 和自动生成的 Release Notes）。`vX.Y.0` 形式的标签会触发，
-例如 `v2.1.0`；修订版本标签（例如 `v2.1.1`）不会触发发布。普通 commit 和 Pull Request
+例如 `v2.2.0`；修订版本标签（例如 `v2.2.1`）不会触发发布。普通 commit 和 Pull Request
 由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
 ```powershell
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.2.0
+git push origin v2.2.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.1.0` 生成
-`bots4velo-2.1.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.2.0` 生成
+`bots4velo-2.2.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
 创建并推送对应标签。
 
 ## 首次联调
@@ -164,14 +164,22 @@ bots:
       interval-ms: 5000
       movement-radius: 0.0
       yaw-step: 20.0
+      random-yaw: false
       jump: false
       swing: false
+      sneak: false
+      path: []
+      server-cycle: [lobby, survival]
+      server-cycle-every: 12
 ```
 
 基础行为会在认证完成后启动，并在切服、断线、重连及重新进入 PLAY 后安全恢复。`STATIC` 保持在线；
-`FARM` 定时转头并可在小半径内往返，可选 `jump` 和 `swing`；`PATROL` 往返移动；`COMMAND`
-循环发送 `behavior.commands`；`FOLLOW` 预留玩家目标，未设目标时保持空闲。跳跃和挥手已按协议
-适配；潜行会在后续通过 input capability 扩展，避免把新版输入包错误发送给 1.16.5。
+`FARM` 支持定时/随机转头、半径往返、越界回到首次记录的安全位置、跳跃、挥手和潜行；`PATROL`
+按 `path` 中的绝对坐标循环，未配置路径时按半径往返；`COMMAND` 循环发送 `behavior.commands`；
+`server-cycle` 可在指定周期轮换服务器。`FOLLOW` 可由配置的 `follow-player` 自动启动，或在运行时
+执行 `/vbot behavior <id|selector> follow <player>`；机器人会自动跨服，并通过目标玩家执行的
+`/minecraft:tp` 跟随，因此目标玩家仍需目标后端的传送权限。`unfollow` 会停止该任务。
+行为和登录后命令均可使用 `{id}`、`{username}`、`{password}` 与 `{server}` 占位符。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
 主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用

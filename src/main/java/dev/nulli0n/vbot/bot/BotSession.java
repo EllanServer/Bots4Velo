@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
-public final class BotSession {
+public final class BotSession implements BehaviorTarget {
     private final BotDefinition definition;
     private final ProxyEndpoint endpoint;
     private final RuntimeConfig runtime;
@@ -75,6 +75,7 @@ public final class BotSession {
     private volatile String activeProtocol = "unresolved";
     private volatile String activeProtocolSource = "unresolved";
     private volatile String lastDisconnectReason = "never connected";
+    private volatile String followTarget = "";
 
     public BotSession(BotDefinition definition, ProxyEndpoint endpoint, RuntimeConfig runtime,
                       ProtocolResolver protocolResolver, TransportRegistry transportRegistry,
@@ -171,6 +172,11 @@ public final class BotSession {
         return active != null && state.get() == BotState.PLAY && active.jump();
     }
 
+    public boolean setSneaking(boolean sneaking) {
+        BotTransport active = transport;
+        return active != null && state.get() == BotState.PLAY && active.setSneaking(sneaking);
+    }
+
     public BotPosition position() {
         BotTransport active = transport;
         return active == null ? BotPosition.unknown() : active.position();
@@ -204,6 +210,14 @@ public final class BotSession {
 
     public BehaviorSnapshot behaviorSnapshot() {
         return behavior.snapshot();
+    }
+
+    public String followTarget() {
+        return followTarget;
+    }
+
+    public void setFollowTarget(String target) {
+        followTarget = target == null ? "" : target.trim();
     }
 
     /**

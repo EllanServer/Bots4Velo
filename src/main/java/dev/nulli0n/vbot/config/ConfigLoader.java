@@ -301,12 +301,15 @@ public final class ConfigLoader {
         long interval = longValue(behavior, "interval-ms", 5_000L, 250L, 3_600_000L);
         double radius = doubleValue(behavior, "movement-radius", 0.0D, 0.0D, 16.0D);
         float yawStep = (float) doubleValue(behavior, "yaw-step", 15.0D, 0.0D, 360.0D);
+        boolean randomYaw = bool(behavior, "random-yaw", false);
         boolean jump = bool(behavior, "jump", false);
         boolean swing = bool(behavior, "swing", false);
+        boolean sneak = bool(behavior, "sneak", false);
         List<String> commands = stringList(behavior.get("commands"));
         List<BehaviorPoint> path = behaviorPath(behavior.get("path"), id);
         List<String> serverCycle = stringList(behavior.get("server-cycle"));
         int serverCycleEvery = integer(behavior, "server-cycle-every", 0, 0, 1_000_000);
+        String followPlayer = text(behavior, "follow-player", "");
         if (mode == BehaviorMode.COMMAND && enabled && commands.isEmpty()) {
             throw new IllegalArgumentException("bots." + id + ".behavior.commands is required for COMMAND mode");
         }
@@ -319,8 +322,11 @@ public final class ConfigLoader {
             throw new IllegalArgumentException("bots." + id
                 + ".behavior.path or movement-radius is required for PATROL");
         }
-        return new BehaviorConfig(mode, enabled, interval, radius, yawStep, jump, swing, commands, path,
-            serverCycle, serverCycleEvery);
+        if (mode == BehaviorMode.FOLLOW && enabled && followPlayer.isBlank()) {
+            throw new IllegalArgumentException("bots." + id + ".behavior.follow-player is required for FOLLOW");
+        }
+        return new BehaviorConfig(mode, enabled, interval, radius, yawStep, randomYaw, jump, swing, sneak, commands, path,
+            serverCycle, serverCycleEvery, followPlayer);
     }
 
     private static List<BehaviorPoint> behaviorPath(Object value, String id) {

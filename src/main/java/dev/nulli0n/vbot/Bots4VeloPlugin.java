@@ -12,6 +12,7 @@ import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import dev.nulli0n.vbot.bot.BotManager;
 import dev.nulli0n.vbot.bot.BotSession;
 import dev.nulli0n.vbot.command.VBotCommand;
@@ -27,6 +28,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.time.Duration;
 
 @Plugin(
     id = "bots4velo",
@@ -43,6 +47,7 @@ public final class Bots4VeloPlugin {
     private volatile BotManager manager;
     private volatile ManagedBotStore managedBotStore;
     private volatile PluginMessages messages;
+    private final ConcurrentMap<String, ScheduledTask> followTasks = new ConcurrentHashMap<>();
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -60,6 +65,7 @@ public final class Bots4VeloPlugin {
             manager = new BotManager(config, logger, new VelocityBackendProtocolDetector(proxy));
             registerCommand();
             manager.startEnabled();
+            startConfiguredFollows(config);
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
@@ -93,6 +99,9 @@ public final class Bots4VeloPlugin {
                 previous.close();
             }
             replacement.startEnabled();
+            followTasks.values().forEach(ScheduledTask::cancel);
+            followTasks.clear();
+            startConfiguredFollows(replacementConfig);
             return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
         catch (RuntimeException exception) {
@@ -137,12 +146,15 @@ public final class Bots4VeloPlugin {
                 ? ManagedRemoveResult.STATIC_BOT : ManagedRemoveResult.NOT_FOUND;
         }
         store.remove(id);
+        stopFollowing(id);
         active.remove(id);
         return ManagedRemoveResult.REMOVED;
     }
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
+        followTasks.values().forEach(ScheduledTask::cancel);
+        followTasks.clear();
         BotManager active = manager;
         if (active != null) {
             active.close();
@@ -269,6 +281,68 @@ public final class Bots4VeloPlugin {
         });
     }
 
+    public FollowResult startFollowing(String botId, String playerName) {
+        Optional<BotSession> found = manager().find(botId);
+        if (found.isEmpty()) {
+            return new FollowResult(false, "unknown bot");
+        }
+        String target = playerName == null ? "" : playerName.trim();
+        if (target.isBlank() || target.equalsIgnoreCase(found.get().definition().username())) {
+            return new FollowResult(false, "a different online player name is required");
+        }
+        stopFollowing(botId);
+        found.get().setFollowTarget(target);
+        ScheduledTask task = proxy.getScheduler().buildTask(this, () -> followTick(found.get().definition().id(), target))
+            .repeat(Duration.ofSeconds(3)).schedule();
+        followTasks.put(found.get().definition().id().toLowerCase(java.util.Locale.ROOT), task);
+        followTick(found.get().definition().id(), target);
+        return new FollowResult(true, "following " + target);
+    }
+
+    public boolean stopFollowing(String botId) {
+        Optional<BotSession> found = manager().find(botId);
+        found.ifPresent(session -> session.setFollowTarget(""));
+        ScheduledTask task = followTasks.remove(botId == null ? "" : botId.trim().toLowerCase(java.util.Locale.ROOT));
+        if (task != null) {
+            task.cancel();
+        }
+        return found.isPresent();
+    }
+
+    private void followTick(String botId, String playerName) {
+        Optional<BotSession> session = manager().find(botId);
+        Optional<Player> target = proxy.getPlayer(playerName);
+        if (session.isEmpty() || target.isEmpty() || !session.get().isPlayable()
+            || !session.get().isAuthenticationComplete()) {
+            return;
+        }
+        Optional<String> server = target.get().getCurrentServer().map(connection -> connection.getServerInfo().getName());
+        if (server.isEmpty()) {
+            return;
+        }
+        currentServer(botId).filter(current -> current.equalsIgnoreCase(server.get())).ifPresentOrElse(current ->
+            target.get().spoofChatInput("/minecraft:tp " + session.get().definition().username() + " "
+                + target.get().getUsername()), () -> switchBotServer(botId, server.get()).thenAccept(result -> {
+                if (result.successful()) {
+                    proxy.getScheduler().buildTask(this, () -> {
+                        if (target.get().getCurrentServer().map(connection -> connection.getServerInfo().getName()
+                            .equalsIgnoreCase(result.server())).orElse(false)) {
+                            target.get().spoofChatInput("/minecraft:tp " + result.username() + " "
+                                + target.get().getUsername());
+                        }
+                    }).delay(Duration.ofMillis(750)).schedule();
+                }
+            }));
+    }
+
+    private void startConfiguredFollows(BotPluginConfig candidate) {
+        candidate.bots().values().stream()
+            .filter(definition -> definition.enabled()
+                && definition.behavior().mode() == BotPluginConfig.BehaviorMode.FOLLOW
+                && !definition.behavior().followPlayer().isBlank())
+            .forEach(definition -> startFollowing(definition.id(), definition.behavior().followPlayer()));
+    }
+
     private Optional<RegisteredServer> findServer(String name) {
         String wanted = name == null ? "" : name.trim();
         if (wanted.isEmpty()) {
@@ -313,6 +387,9 @@ public final class Bots4VeloPlugin {
     }
 
     public record ReloadResult(int configuredBots, int managedBots) {
+    }
+
+    public record FollowResult(boolean successful, String detail) {
     }
 
     public enum ManagedRemoveResult {

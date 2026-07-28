@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import java.time.Instant;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * added as transport capabilities without changing session lifecycle logic.
  */
 final class BotBehaviorRunner implements AutoCloseable {
-    private final BotSession session;
+    private final BehaviorTarget session;
     private final BehaviorConfig config;
     private final ScheduledExecutorService executor;
     private final Logger logger;
@@ -32,8 +33,9 @@ final class BotBehaviorRunner implements AutoCloseable {
     private volatile int commandIndex;
     private volatile int pathIndex;
     private volatile int serverIndex;
+    private volatile BotPosition anchor = BotPosition.unknown();
 
-    BotBehaviorRunner(BotSession session, BehaviorConfig config, ScheduledExecutorService executor, Logger logger) {
+    BotBehaviorRunner(BehaviorTarget session, BehaviorConfig config, ScheduledExecutorService executor, Logger logger) {
         this.session = session;
         this.config = config;
         this.executor = executor;
@@ -62,13 +64,16 @@ final class BotBehaviorRunner implements AutoCloseable {
     synchronized void pause() {
         paused.set(true);
         cancelTask();
+        if (config.sneak()) {
+            session.setSneaking(false);
+        }
         lastAction = "paused by operator";
     }
 
     BehaviorSnapshot snapshot() {
         boolean running = task != null && !task.isDone() && !paused.get();
         return new BehaviorSnapshot(config.mode(), requested.get(), running, paused.get(), cycles.get(),
-            lastActionAt, lastAction);
+            lastActionAt, lastAction, session.followTarget());
     }
 
     @Override
@@ -132,7 +137,13 @@ final class BotBehaviorRunner implements AutoCloseable {
             lastAction = "farm waiting for initial position";
             return;
         }
-        float yaw = normalizeYaw(position.yaw() + (forward ? config.yawStep() : -config.yawStep()));
+        if (!anchor.known()) {
+            anchor = position;
+        }
+        float direction = config.randomYaw()
+            ? (float) ThreadLocalRandom.current().nextDouble(-config.yawStep(), config.yawStep())
+            : (forward ? config.yawStep() : -config.yawStep());
+        float yaw = normalizeYaw(position.yaw() + direction);
         session.look(yaw, position.pitch());
         if (config.jump()) {
             session.jump();
@@ -140,11 +151,21 @@ final class BotBehaviorRunner implements AutoCloseable {
         if (config.swing()) {
             session.swingMainHand();
         }
+        if (config.sneak()) {
+            session.setSneaking(true);
+        }
         if (config.movementRadius() > 0.0D) {
             double offset = forward ? config.movementRadius() : -config.movementRadius();
-            session.moveTo(position.x() + offset, position.y(), position.z());
+            double distanceFromAnchor = Math.hypot(position.x() - anchor.x(), position.z() - anchor.z());
+            if (distanceFromAnchor > config.movementRadius() * 1.5D) {
+                session.moveTo(anchor.x(), anchor.y(), anchor.z());
+                lastAction = "farm returned to safety radius";
+            }
+            else {
+                session.moveTo(anchor.x() + offset, anchor.y(), anchor.z());
+                lastAction = "farm look and move";
+            }
             forward = !forward;
-            lastAction = "farm look and move";
         }
         else {
             lastAction = "farm look";

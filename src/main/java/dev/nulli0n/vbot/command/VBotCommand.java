@@ -268,8 +268,8 @@ public final class VBotCommand implements SimpleCommand {
     }
 
     private void behavior(CommandSource source, String[] args) {
-        if (args.length != 3) {
-            source.sendMessage(Component.text("Usage: /vbot behavior <id|selector> <start|pause|status>",
+        if (args.length < 3 || args.length > 4) {
+            source.sendMessage(Component.text("Usage: /vbot behavior <id|selector> <start|pause|status|follow|unfollow> [player]",
                 NamedTextColor.YELLOW));
             return;
         }
@@ -294,10 +294,31 @@ public final class VBotCommand implements SimpleCommand {
                 source.sendMessage(Component.text(session.definition().id() + ": " + status.mode()
                     + " requested=" + status.requested() + " running=" + status.running()
                     + " paused=" + status.paused() + " cycles=" + status.cycles()
-                    + " last=" + status.lastAction(), NamedTextColor.GRAY));
+                    + " last=" + status.lastAction() + " follow="
+                    + (status.followTarget().isBlank() ? "-" : status.followTarget()), NamedTextColor.GRAY));
             });
+            case "follow" -> {
+                if (args.length != 4) {
+                    source.sendMessage(Component.text("Usage: /vbot behavior <id|selector> follow <player>",
+                        NamedTextColor.YELLOW));
+                    return;
+                }
+                int started = 0;
+                for (dev.nulli0n.vbot.bot.BotSession target : targets) {
+                    if (plugin.startFollowing(target.definition().id(), args[3]).successful()) {
+                        started++;
+                    }
+                }
+                source.sendMessage(Component.text("Following requested for " + started + "/" + targets.size()
+                    + " bot(s).", started == targets.size() ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+            }
+            case "unfollow" -> {
+                targets.forEach(target -> plugin.stopFollowing(target.definition().id()));
+                source.sendMessage(Component.text("Follow stopped for " + targets.size() + " bot(s).",
+                    NamedTextColor.YELLOW));
+            }
             default -> source.sendMessage(Component.text(
-                "Behavior action must be start, pause or status.", NamedTextColor.RED));
+                "Behavior action must be start, pause, status, follow or unfollow.", NamedTextColor.RED));
         }
     }
 
@@ -499,6 +520,7 @@ public final class VBotCommand implements SimpleCommand {
                 "/vbot start|stop|reconnect <id|selector> - Control",
                 "/vbot command <id|selector> <command...> - Run command",
                 "/vbot behavior <id|selector> <start|pause|status>",
+                "/vbot behavior <id|selector> follow <player>",
                 "/vbot create <id> <name> <password|-> [server|-]",
                 "/vbot remove <id> - Remove a managed bot",
                 "/vbot monitor [id] - Output monitoring JSON",
@@ -610,6 +632,7 @@ public final class VBotCommand implements SimpleCommand {
         result.put("cycles", behavior.cycles());
         result.put("lastAction", behavior.lastAction());
         result.put("lastActionAt", instantOrNull(behavior.lastActionAt()));
+        result.put("followTarget", behavior.followTarget().isBlank() ? null : behavior.followTarget());
         return result;
     }
 
@@ -667,7 +690,7 @@ public final class VBotCommand implements SimpleCommand {
                 .filter(server -> server.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("behavior")) {
-            return List.of("start", "pause", "status").stream()
+            return List.of("start", "pause", "status", "follow", "unfollow").stream()
                 .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
         }
         return List.of();

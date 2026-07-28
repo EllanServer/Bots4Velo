@@ -85,5 +85,13 @@ bots:
       interval-ms: 5000
       movement-radius: 0.0
       yaw-step: 20.0
+      random-yaw: false
       jump: false
       swing: false
+      sneak: false
+      # PATROL may use absolute points. server-cycle rotates servers after the
+      # configured number of behavior cycles (zero disables it).
+      path: []
+      server-cycle: []
+      server-cycle-every: 0
+      follow-player: ""

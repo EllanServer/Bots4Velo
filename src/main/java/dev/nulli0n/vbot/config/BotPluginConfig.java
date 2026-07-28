@@ -103,23 +103,27 @@ public record BotPluginConfig(
         long intervalMillis,
         double movementRadius,
         float yawStep,
+        boolean randomYaw,
         boolean jump,
         boolean swing,
+        boolean sneak,
         List<String> commands,
         List<BehaviorPoint> path,
         List<String> serverCycle,
-        int serverCycleEvery
+        int serverCycleEvery,
+        String followPlayer
     ) {
         public BehaviorConfig {
             mode = mode == null ? BehaviorMode.STATIC : mode;
             commands = List.copyOf(commands);
             path = List.copyOf(path);
             serverCycle = List.copyOf(serverCycle);
+            followPlayer = followPlayer == null ? "" : followPlayer.trim();
         }
 
         public static BehaviorConfig disabled() {
-            return new BehaviorConfig(BehaviorMode.STATIC, false, 5_000L, 0.0D, 15.0F, false, false,
-                List.of(), List.of(), List.of(), 0);
+            return new BehaviorConfig(BehaviorMode.STATIC, false, 5_000L, 0.0D, 15.0F, false, false, false, false,
+                List.of(), List.of(), List.of(), 0, "");
         }
     }
 

@@ -168,6 +168,14 @@ class ConfigLoaderTest {
                   interval-ms: 1000
                   movement-radius: 2.5
                   yaw-step: 30
+                  random-yaw: true
+                  jump: true
+                  swing: true
+                  sneak: true
+                  path:
+                    - {x: 10, y: 65, z: -10}
+                  server-cycle: [lobby, survival]
+                  server-cycle-every: 3
             bots:
               Farm01:
                 template: active-farm
@@ -181,6 +189,13 @@ class ConfigLoaderTest {
         assertThat(behavior.intervalMillis()).isEqualTo(1_000L);
         assertThat(behavior.movementRadius()).isEqualTo(2.5D);
         assertThat(behavior.yawStep()).isEqualTo(30.0F);
+        assertThat(behavior.randomYaw()).isTrue();
+        assertThat(behavior.jump()).isTrue();
+        assertThat(behavior.swing()).isTrue();
+        assertThat(behavior.sneak()).isTrue();
+        assertThat(behavior.path()).containsExactly(new BotPluginConfig.BehaviorPoint(10, 65, -10));
+        assertThat(behavior.serverCycle()).containsExactly("lobby", "survival");
+        assertThat(behavior.serverCycleEvery()).isEqualTo(3);
     }
 
     @Test

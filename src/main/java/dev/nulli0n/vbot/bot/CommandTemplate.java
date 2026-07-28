@@ -8,6 +8,7 @@ public final class CommandTemplate {
 
     public static String render(String template, BotDefinition bot) {
         String rendered = template
+            .replace("{id}", bot.id())
             .replace("{username}", bot.username())
             .replace("{password}", bot.password())
             .replace("{server}", bot.targetServer());

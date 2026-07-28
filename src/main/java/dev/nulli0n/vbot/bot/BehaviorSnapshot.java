@@ -11,6 +11,7 @@ public record BehaviorSnapshot(
     boolean paused,
     long cycles,
     Instant lastActionAt,
-    String lastAction
+    String lastAction,
+    String followTarget
 ) {
 }
