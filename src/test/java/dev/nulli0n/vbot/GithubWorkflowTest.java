@@ -44,6 +44,12 @@ class GithubWorkflowTest {
             .contains("run: ./gradlew clean check shadowJar writeArtifactChecksum")
             .contains("protocol-contract:")
             .contains("protocol: [\"1.16.5\", \"1.21.11\", \"26.1.2\", \"26.2\"]")
-            .contains("-PciProtocol=\"${{ matrix.protocol }}\"");
+            .contains("-PciProtocol=\"${{ matrix.protocol }}\"")
+            .contains("integration-network:")
+            .contains("minecraft: \"1.16.5\"")
+            .contains("minecraft: \"1.21.11\"")
+            .contains("minecraft: \"26.1.2\"")
+            .contains("minecraft: \"26.2\"")
+            .contains("scripts/ci/run-network-integration.sh");
     }
 }

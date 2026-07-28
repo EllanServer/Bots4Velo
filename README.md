@@ -83,8 +83,10 @@ git push origin v2.4.0
 
 ## 集成验证
 
-普通 CI 会在 `1.16.5`、`1.21.11`、`26.1.2` 与 `26.2` 四个目标上执行协议映射回归；完整
-Velocity + 登录服 + lobby + AFK 后端联调使用本地隔离网络。启动该网络后可执行：
+普通 CI 会在 `1.16.5`、`1.21.11`、`26.1.2` 与 `26.2` 四个目标上执行协议映射回归，并为每个
+目标下载并启动一个临时 Velocity + AuthMe 登录服 + lobby + AFK Paper 网络，验证登录、PLAY、跨服与
+后端/代理重启恢复。完整日志会作为 CI artifact 上传。`scripts/ci/run-network-integration.sh` 也可在
+Linux 上单独执行。现有本地隔离网络启动后还可执行：
 
 ```powershell
 .\scripts\verify-local-integration.ps1 -RequireBotsInPlay

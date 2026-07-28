@@ -7,3 +7,4 @@ run/
 *.log
 *.pid
 test-network/
+.integration-network/
