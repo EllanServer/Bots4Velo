@@ -31,16 +31,21 @@ jobs:
         run: chmod +x gradlew
 
       - name: Test and build release JAR
-        run: ./gradlew clean test shadowJar -PpluginVersion="${GITHUB_REF_NAME#v}"
+        run: ./gradlew clean test shadowJar writeArtifactChecksum -PpluginVersion="${GITHUB_REF_NAME#v}"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: bots4velo-${{ github.ref_name }}
-          path: build/libs/*.jar
+          path: build/libs/*
           if-no-files-found: error
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" build/libs/*.jar --title "${GITHUB_REF_NAME}" --verify-tag --generate-notes
+
+      - name: Upload release checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" build/libs/*.sha256 --clobber

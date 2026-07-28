@@ -1,10 +1,12 @@
+import java.security.MessageDigest
+
 plugins {
     java
     id("com.gradleup.shadow") version "9.6.1"
 }
 
 group = "dev.nulli0n.bots4velo"
-version = providers.gradleProperty("pluginVersion").orElse("2.3.0").get()
+version = providers.gradleProperty("pluginVersion").orElse("2.4.0").get()
 
 java {
     toolchain {
@@ -119,4 +121,16 @@ val verifyShadowJar = tasks.register<JavaExec>("verifyShadowJar") {
 
 tasks.check {
     dependsOn(verifyShadowJar)
+}
+
+val writeArtifactChecksum = tasks.register("writeArtifactChecksum") {
+    dependsOn(tasks.shadowJar)
+    doLast {
+        val jars = fileTree(layout.buildDirectory.dir("libs")) { include("*.jar") }.files
+        check(jars.size == 1) { "Expected exactly one plugin JAR, found ${jars.size}" }
+        val jar = jars.single()
+        val digest = MessageDigest.getInstance("SHA-256").digest(jar.readBytes())
+            .joinToString("") { byte: Byte -> "%02x".format(byte) }
+        jar.resolveSibling(jar.name + ".sha256").writeText("$digest  ${jar.name}\n")
+    }
 }

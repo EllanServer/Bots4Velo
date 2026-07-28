@@ -56,7 +56,7 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 .\gradlew.bat clean check shadowJar
 ```
 
-默认产物位于 `build/libs/bots4velo-2.3.0.jar`；也可以通过
+默认产物位于 `build/libs/bots4velo-2.4.0.jar`；也可以通过
 `-PpluginVersion=<version>` 覆盖构建版本。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
 只需把这个 JAR 放入 Velocity 的 `plugins` 目录。首次启动会生成
@@ -69,17 +69,30 @@ MCProtocolLib 及其传递依赖冲突的设计结果。
 
 每次功能版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
 GitHub Release（附带 JAR 和自动生成的 Release Notes）。`vX.Y.0` 形式的标签会触发，
-例如 `v2.3.0`；修订版本标签（例如 `v2.3.1`）不会触发发布。普通 commit 和 Pull Request
+例如 `v2.4.0`；修订版本标签（例如 `v2.4.1`）不会触发发布。普通 commit 和 Pull Request
 由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
 ```powershell
-git tag v2.3.0
-git push origin v2.3.0
+git tag v2.4.0
+git push origin v2.4.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.3.0` 生成
-`bots4velo-2.3.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.4.0` 生成
+`bots4velo-2.4.0.jar` 及同名 `.sha256` 校验文件。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
 创建并推送对应标签。
+
+## 集成验证
+
+普通 CI 会在 `1.16.5`、`1.21.11`、`26.1.2` 与 `26.2` 四个目标上执行协议映射回归；完整
+Velocity + 登录服 + lobby + AFK 后端联调使用本地隔离网络。启动该网络后可执行：
+
+```powershell
+.\scripts\verify-local-integration.ps1 -RequireBotsInPlay
+```
+
+该检查确认三个监听端口、已部署的插件版本、可选 SHA-256 文件、Velocity 加载记录，以及至少一个机器人进入
+`PLAY`。长时间稳定性和代理/后端重启、网络中断、认证超时及资源包重复下发的故障注入应在该网络上作为独立
+运行任务执行；它们不应被一次普通 commit 的快速 CI 伪装成已经完成。
 
 ## 首次联调
 

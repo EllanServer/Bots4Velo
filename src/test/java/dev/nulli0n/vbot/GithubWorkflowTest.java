@@ -23,10 +23,11 @@ class GithubWorkflowTest {
             .contains("permissions:\n  contents: write")
             .contains("java-version: \"21\"")
             .contains("run: chmod +x gradlew")
-            .contains("run: ./gradlew clean test shadowJar -PpluginVersion=\"${GITHUB_REF_NAME#v}\"")
-            .contains("path: build/libs/*.jar")
+            .contains("run: ./gradlew clean test shadowJar writeArtifactChecksum -PpluginVersion=\"${GITHUB_REF_NAME#v}\"")
+            .contains("path: build/libs/*")
             .contains("GH_TOKEN: ${{ github.token }}")
-            .contains("gh release create \"${GITHUB_REF_NAME}\" build/libs/*.jar --title \"${GITHUB_REF_NAME}\" --verify-tag --generate-notes");
+            .contains("gh release create \"${GITHUB_REF_NAME}\" build/libs/*.jar --title \"${GITHUB_REF_NAME}\" --verify-tag --generate-notes")
+            .contains("gh release upload \"${GITHUB_REF_NAME}\" build/libs/*.sha256 --clobber");
     }
 
     @Test
@@ -40,6 +41,9 @@ class GithubWorkflowTest {
             .contains("branches:")
             .contains("java-version: \"21\"")
             .contains("run: chmod +x gradlew")
-            .contains("run: ./gradlew clean check shadowJar");
+            .contains("run: ./gradlew clean check shadowJar writeArtifactChecksum")
+            .contains("protocol-contract:")
+            .contains("protocol: [\"1.16.5\", \"1.21.11\", \"26.1.2\", \"26.2\"]")
+            .contains("-PciProtocol=\"${{ matrix.protocol }}\"");
     }
 }
