@@ -21,6 +21,15 @@ PIDS=()
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
+# GitHub's Ubuntu runners use a native Linux JDK. WSL cannot reliably probe
+# loopback ports opened by a Windows java.exe child, so fail immediately with
+# an actionable message instead of spending the Paper startup timeout waiting
+# for a port that the shell cannot reach. Git Bash/MINGW is unaffected.
+if [[ "$(uname -s)" == "Linux" && "$PAPER_JAVA" == *.exe ]]; then
+  die "PAPER_JAVA must be a native Linux JDK when running under Linux/WSL; install Java in WSL or run this script from Git Bash."
+fi
+[[ -x "$PAPER_JAVA" ]] || die "PAPER_JAVA is not executable: $PAPER_JAVA"
+
 cleanup() {
   local process
   for process in "${PIDS[@]:-}"; do
