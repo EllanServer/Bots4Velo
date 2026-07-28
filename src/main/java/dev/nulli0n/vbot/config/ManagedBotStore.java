@@ -163,6 +163,8 @@ public final class ManagedBotStore {
         bot.put("server-switch-delay-ms", definition.serverSwitchDelayMillis());
         bot.put("server-switch-maximum-attempts", definition.serverSwitchMaximumAttempts());
         bot.put("after-login-commands", definition.afterLoginCommands());
+        bot.put("display-name", definition.displayName());
+        bot.put("tab-group", definition.tabGroup());
         return bot;
     }
 

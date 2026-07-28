@@ -146,6 +146,10 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot reconnect @server:lobby
 ```
 
+当 TAB 已安装时，机器人可设置 `display-name` 和 `tab-group`。Bots4Velo 会在机器人上线后以 TAB 的
+临时 API 应用它们，并在重连后自动恢复；可在 TAB 的格式规则中使用 `%bots4velo_tab_group%` 占位符。
+这些覆盖不会写入或修改 TAB 的 `users.yml` / `groups.yml`。
+
 权限默认采用最小职责划分：`bots4velo.view` 用于查看、`bots4velo.control` 用于连接与移动控制、
 `bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
 `bots4velo.admin` 拥有全部权限。

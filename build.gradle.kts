@@ -56,6 +56,7 @@ repositories {
 
 dependencies {
     compileOnly("com.velocitypowered:velocity-api:3.4.0")
+    compileOnly("com.github.NEZNAMY:TAB-API:6.0.0")
     annotationProcessor("com.velocitypowered:velocity-api:3.4.0")
 
     implementation(project(":transport-api"))

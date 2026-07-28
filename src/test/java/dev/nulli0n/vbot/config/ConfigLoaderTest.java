@@ -179,6 +179,8 @@ class ConfigLoaderTest {
                 groups: [farm]
                 tags: [backup, afk]
                 protocol-version: 26.2
+                display-name: "&eFarm Bot"
+                tab-group: farm-bots
                 auth:
                   mode: LOGIN
                   login-command: login {password}
@@ -201,6 +203,8 @@ class ConfigLoaderTest {
         assertThat(bot.tags()).containsExactly("backup", "afk");
         assertThat(bot.protocolOverride().fixedVersion().protocolId()).isEqualTo(776);
         assertThat(bot.templateName()).isEqualTo("farm-auth");
+        assertThat(bot.displayName()).isEqualTo("&eFarm Bot");
+        assertThat(bot.tabGroup()).isEqualTo("farm-bots");
     }
 
     @Test

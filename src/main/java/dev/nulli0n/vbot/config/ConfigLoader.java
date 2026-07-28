@@ -194,6 +194,8 @@ public final class ConfigLoader {
                 stringList(bot.get("after-login-commands")),
                 identifiers(bot.get("groups"), "bots." + id + ".groups"),
                 identifiers(bot.get("tags"), "bots." + id + ".tags"),
+                text(bot, "display-name", ""),
+                text(bot, "tab-group", ""),
                 optionalProtocol(bot, id),
                 templateDescription(bot),
                 parseBehavior(section(bot, "behavior"), id)

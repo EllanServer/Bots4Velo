@@ -107,6 +107,8 @@ public record BotPluginConfig(
         List<String> afterLoginCommands,
         List<String> groups,
         List<String> tags,
+        String displayName,
+        String tabGroup,
         ProtocolSelection protocolOverride,
         String templateName,
         BehaviorConfig behavior
@@ -115,6 +117,8 @@ public record BotPluginConfig(
             afterLoginCommands = List.copyOf(afterLoginCommands);
             groups = List.copyOf(groups);
             tags = List.copyOf(tags);
+            displayName = displayName == null ? "" : displayName.trim();
+            tabGroup = tabGroup == null ? "" : tabGroup.trim();
             templateName = templateName == null ? "" : templateName;
             behavior = behavior == null ? BehaviorConfig.disabled() : behavior;
         }
@@ -139,7 +143,7 @@ public record BotPluginConfig(
         ) {
             this(id, enabled, username, password, targetServer, protocolDetectionServer, renderDistance, auth,
                 serverSwitchCommand, serverSwitchDelayMillis, serverSwitchMaximumAttempts, afterLoginCommands,
-                List.of(), List.of(), null, "", BehaviorConfig.disabled());
+                List.of(), List.of(), "", "", null, "", BehaviorConfig.disabled());
         }
     }
 

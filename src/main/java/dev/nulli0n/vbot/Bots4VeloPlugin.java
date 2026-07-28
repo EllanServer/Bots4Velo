@@ -7,6 +7,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
@@ -26,6 +27,7 @@ import dev.nulli0n.vbot.config.ManagedBotStore;
 import dev.nulli0n.vbot.message.PluginMessages;
 import dev.nulli0n.vbot.observe.PrometheusExporter;
 import dev.nulli0n.vbot.observe.WebhookNotifier;
+import dev.nulli0n.vbot.tab.TabIntegration;
 import dev.nulli0n.vbot.protocol.VelocityBackendProtocolDetector;
 import org.slf4j.Logger;
 
@@ -44,7 +46,8 @@ import java.util.function.Consumer;
     name = "Bots4Velo",
     version = BuildConstants.VERSION,
     description = "Embedded multi-version headless Minecraft clients for Velocity",
-    authors = {"OpenAI Codex"}
+    authors = {"OpenAI Codex"},
+    dependencies = {@Dependency(id = "tab", optional = true)}
 )
 public final class Bots4VeloPlugin implements Bots4VeloApi {
     private final ProxyServer proxy;
@@ -58,6 +61,8 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private final ConcurrentMap<String, ScheduledTask> scheduledActions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> presenceTasks = new ConcurrentHashMap<>();
     private volatile PrometheusExporter prometheusExporter;
+    private volatile TabIntegration tabIntegration;
+    private volatile ScheduledTask tabTask;
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -80,6 +85,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startConfiguredSchedules(config);
             startPresenceRules(config);
             startPrometheus(manager, config);
+            startTabIntegration(manager);
             Bots4VeloApiProvider.register(this);
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
@@ -126,6 +132,8 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startPresenceRules(replacementConfig);
             stopPrometheus();
             startPrometheus(replacement, replacementConfig);
+            stopTabIntegration();
+            startTabIntegration(replacement);
             return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
         catch (RuntimeException exception) {
@@ -185,6 +193,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         presenceTasks.values().forEach(ScheduledTask::cancel);
         presenceTasks.clear();
         stopPrometheus();
+        stopTabIntegration();
         BotManager active = manager;
         if (active != null) {
             active.close();
@@ -463,6 +472,36 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private void stopPrometheus() {
         PrometheusExporter active = prometheusExporter;
         prometheusExporter = null;
+        if (active != null) {
+            active.close();
+        }
+    }
+
+    private void startTabIntegration(BotManager candidate) {
+        if (proxy.getPluginManager().getPlugin("tab").isEmpty()) {
+            return;
+        }
+        try {
+            TabIntegration integration = new TabIntegration(candidate, logger);
+            tabIntegration = integration;
+            tabTask = proxy.getScheduler().buildTask(this, integration::apply)
+                .repeat(Duration.ofSeconds(1)).schedule();
+            integration.apply();
+            logger.info("TAB integration enabled; use {} in TAB formatting", TabIntegration.GROUP_PLACEHOLDER);
+        }
+        catch (RuntimeException | LinkageError exception) {
+            logger.warn("TAB is installed but its API could not be initialized", exception);
+        }
+    }
+
+    private void stopTabIntegration() {
+        ScheduledTask task = tabTask;
+        tabTask = null;
+        if (task != null) {
+            task.cancel();
+        }
+        TabIntegration active = tabIntegration;
+        tabIntegration = null;
         if (active != null) {
             active.close();
         }

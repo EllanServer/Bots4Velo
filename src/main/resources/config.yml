@@ -92,6 +92,10 @@ bots:
     template: authme-farm
     enabled: false
     username: "AFK_Iron01"
+    # Applied only when TAB is installed. tab-group is a temporary TAB group
+    # and %bots4velo_tab_group% can be used in TAB's own formatting rules.
+    display-name: "&eIron Farm Bot"
+    tab-group: "farm-bots"
     # Choose exactly one: password, password-env or password-secret.
     password-secret: "iron-farm-01"
     target-server: "survival"

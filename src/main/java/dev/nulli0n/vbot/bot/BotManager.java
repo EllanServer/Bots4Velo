@@ -74,6 +74,11 @@ public final class BotManager implements AutoCloseable {
         return sortedSessions().stream().map(BotSession::snapshot).toList();
     }
 
+    /** Returns stable bot sessions for optional integrations such as TAB. */
+    public List<BotSession> sessions() {
+        return sortedSessions();
+    }
+
     /**
      * Resolves a stable, local bot selector. Server selectors are completed by
      * the Velocity-facing plugin because only it can observe current backend
