@@ -1,0 +1,71 @@
+# bots4velo multi-protocol headless client
+# Start with enabled: false, finish the endpoint/auth settings, then enable one bot.
+
+proxy:
+  address: "127.0.0.1"
+  port: 25565
+  # Hostname and port written into the Minecraft handshake. This matters when
+  # Velocity forced-host routing is enabled.
+  virtual-host: "localhost"
+  virtual-port: 25565
+  # AUTO is recommended. Per bot it first pings protocol-detection-server, or
+  # target-server when the former is empty. Only bots with neither value fall
+  # back to the proxy Status response. This avoids selecting Velocity's newest
+  # advertised protocol when an older backend is the actual destination.
+  # Manual values: 1.16.5, 1.21.11, 26.1.2, 26.2.
+  protocol-version: "AUTO"
+  protocol-detection-timeout-ms: 3000
+
+runtime:
+  auto-start-delay-ms: 3000
+  # Hard safety cap across config.yml and runtime-created managed bots.
+  maximum-bots: 32
+  # Applies to automatic starts and /vbot start|reconnect|create, preventing a
+  # login burst from flooding Velocity or the authentication server.
+  spawn-interval-ms: 1500
+  command-interval-ms: 750
+  resource-pack-step-delay-ms: 150
+  resource-pack-mode: "ACCEPT_WITHOUT_DOWNLOAD"
+  auto-respawn: true
+  reconnect:
+    initial-delay-ms: 5000
+    maximum-delay-ms: 60000
+    multiplier: 2.0
+    jitter: 0.15
+    # Zero means retry forever.
+    maximum-attempts: 0
+
+bots:
+  IronFarm01:
+    enabled: false
+    username: "AFK_Iron01"
+    password: "change-this-password"
+    target-server: "survival"
+    # AUTO detection pings this registered Velocity backend directly. Empty uses
+    # target-server; if both are empty it falls back to the proxy Status response.
+    protocol-detection-server: ""
+    render-distance: 2
+    auth:
+      # NONE, LOGIN, REGISTER or AUTO. AUTO reacts to configured prompt text,
+      # then falls back to login followed by register for first-time accounts.
+      mode: "AUTO"
+      login-command: "login {password}"
+      register-command: "register {password} {password}"
+      login-delay-ms: 1000
+      fallback-register-delay-ms: 2500
+      after-auth-delay-ms: 1500
+      login-prompts:
+        - "(?i)(please login|/login|请登录|请输入密码)"
+      register-prompts:
+        - "(?i)(please register|/register|请注册)"
+      success-messages:
+        # Includes AuthMe/AuthMeReloaded's common English chat responses.
+        - "(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|^authenticated$|登录成功|注册成功|认证成功)"
+    server-switch-command: "server {server}"
+    # Retry interval and post-confirmation settle time before after-login commands.
+    # A retry is sent until a second PLAY transition proves the backend switch.
+    server-switch-delay-ms: 3000
+    # Zero retries forever. After-login commands never run before confirmation.
+    server-switch-maximum-attempts: 0
+    after-login-commands:
+      - "res tp ironfarm"
