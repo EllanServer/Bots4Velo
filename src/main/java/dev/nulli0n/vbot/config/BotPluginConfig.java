@@ -190,13 +190,30 @@ public record BotPluginConfig(
         List<String> loginPrompts,
         List<String> registerPrompts,
         List<String> successMessages,
-        List<String> failureMessages
+        List<String> failureMessages,
+        long timeoutMillis
     ) {
         public AuthConfig {
             loginPrompts = List.copyOf(loginPrompts);
             registerPrompts = List.copyOf(registerPrompts);
             successMessages = List.copyOf(successMessages);
             failureMessages = List.copyOf(failureMessages);
+        }
+
+        public AuthConfig(
+            AuthMode mode,
+            String loginCommand,
+            String registerCommand,
+            long loginDelayMillis,
+            long fallbackRegisterDelayMillis,
+            long afterAuthDelayMillis,
+            List<String> loginPrompts,
+            List<String> registerPrompts,
+            List<String> successMessages,
+            List<String> failureMessages
+        ) {
+            this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages, 30_000);
         }
 
         public AuthConfig(

@@ -31,6 +31,31 @@ class ConfigLoaderTest {
         assertThat(config.bots().get("farm01").serverSwitchMaximumAttempts()).isZero();
         assertThat(config.bots().get("farm01").protocolDetectionServer()).isBlank();
         assertThat(config.runtime().maximumBots()).isEqualTo(32);
+        assertThat(config.bots().get("farm01").auth().timeoutMillis()).isEqualTo(30_000L);
+    }
+
+    @Test
+    void parsesAuthenticationTimeoutAndRejectsNegativeValue() {
+        BotPluginConfig config = parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  timeout-ms: 12000
+            """);
+
+        assertThat(config.bots().get("farm01").auth().timeoutMillis()).isEqualTo(12_000L);
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  timeout-ms: -1
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("timeout-ms");
     }
 
     @Test

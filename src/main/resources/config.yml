@@ -70,6 +70,9 @@ templates:
       login-delay-ms: 1000
       fallback-register-delay-ms: 2500
       after-auth-delay-ms: 1500
+      # Stop with an explicit AUTH_TIMEOUT event rather than retrying forever
+      # when an authentication plugin never completes the login flow. Zero disables it.
+      timeout-ms: 30000
       login-prompts:
         - "(?i)(please login|/login|请登录|请输入密码)"
       register-prompts:

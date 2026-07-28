@@ -162,7 +162,8 @@ public final class ConfigLoader {
                 stringList(auth.get("login-prompts")),
                 stringList(auth.get("register-prompts")),
                 stringList(auth.get("success-messages")),
-                stringList(auth.get("failure-messages"))
+                stringList(auth.get("failure-messages")),
+                longValue(auth, "timeout-ms", 30_000, 0, 3_600_000)
             );
             String username = text(bot, "username", id);
             validateUsername(username, id);

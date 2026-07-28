@@ -108,6 +108,11 @@ view-distance=4
 simulation-distance=4
 max-players=10
 motd=Bots4Velo CI $name $MINECRAFT_VERSION
+# Bots4Velo acknowledges this URL without downloading it. The same offer is
+# intentionally sent after a proxy restart to exercise duplicate pack handling.
+resource-pack=https://example.invalid/bots4velo-ci.zip
+resource-pack-sha1=da39a3ee5e6b4b0d3255bfef95601890afd80709
+require-resource-pack=false
 EOF
   (
     cd "$directory"
@@ -183,10 +188,29 @@ bots:
       login-delay-ms: 250
       fallback-register-delay-ms: 500
       after-auth-delay-ms: 250
+      timeout-ms: 30000
       login-prompts: ["(?i)(please login|/login)"]
       register-prompts: ["(?i)(please register|/register)"]
       success-messages: ["(?i)(registered successfully|logged in successfully|login successful)"]
       failure-messages: ["(?i)(incorrect password|captcha|2fa|verification code|banned)"]
+  AuthenticationTimeout:
+    enabled: true
+    username: "B4VTimeout${PROTOCOL_ID}"
+    password: "Bots4VeloTest"
+    auth:
+      # A new account receives a REGISTER UI; LOGIN intentionally declines it,
+      # exercising the pre-join UI timeout rather than accepting a password.
+      mode: "LOGIN"
+      login-command: "b4vnoop"
+      register-command: "b4vnoop"
+      login-delay-ms: 100
+      fallback-register-delay-ms: 100
+      after-auth-delay-ms: 0
+      timeout-ms: 2500
+      login-prompts: ["(?i)(please login|/login)"]
+      register-prompts: ["(?i)(please register|/register)"]
+      success-messages: []
+      failure-messages: []
 EOF
   (
     cd "$velocity_directory"
@@ -239,6 +263,8 @@ VELOCITY_LOG="$WORK_ROOT/velocity/console.log"
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
 wait_for_log "$VELOCITY_LOG" '(submitting its (login|registration) command|matched authentication success)' 90
+wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
+wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 
 log "Fault test: restart AFK backend"
 kill "$AFK_PID"
@@ -250,5 +276,6 @@ wait_for_log "$WORK_ROOT/afk/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
 log "Fault test: restart Velocity; enabled bot must return to PLAY"
 restart_velocity
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
+wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 
 log "Integration passed: Minecraft $MINECRAFT_VERSION / protocol $PROTOCOL_ID"

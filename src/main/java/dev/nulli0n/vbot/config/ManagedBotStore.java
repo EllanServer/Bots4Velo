@@ -149,6 +149,7 @@ public final class ManagedBotStore {
         auth.put("register-prompts", definition.auth().registerPrompts());
         auth.put("success-messages", definition.auth().successMessages());
         auth.put("failure-messages", definition.auth().failureMessages());
+        auth.put("timeout-ms", definition.auth().timeoutMillis());
 
         Map<String, Object> bot = new LinkedHashMap<>();
         bot.put("enabled", definition.enabled());

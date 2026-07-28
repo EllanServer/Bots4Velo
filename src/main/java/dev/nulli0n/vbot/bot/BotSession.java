@@ -74,6 +74,7 @@ public final class BotSession implements BehaviorTarget {
     private volatile BotTransport transport;
     private volatile ScheduledFuture<?> reconnectTask;
     private volatile ScheduledFuture<?> serverSwitchTask;
+    private volatile ScheduledFuture<?> authenticationTimeoutTask;
     private volatile Instant connectedAt;
     private volatile Instant lastPlayAt;
     private volatile Instant lastDisconnectAt;
@@ -139,6 +140,7 @@ public final class BotSession implements BehaviorTarget {
         generation.incrementAndGet();
         cancelReconnect();
         cancelServerSwitch();
+        cancelAuthenticationTimeout();
         behavior.onUnavailable();
         BotTransport active = transport;
         transport = null;
@@ -299,6 +301,7 @@ public final class BotSession implements BehaviorTarget {
 
     private void resetConnectionState() {
         cancelServerSwitch();
+        cancelAuthenticationTimeout();
         connectedAt = null;
         loginSent.set(false);
         registerSent.set(false);
@@ -322,6 +325,11 @@ public final class BotSession implements BehaviorTarget {
             case LOGIN -> {
                 state.set(BotState.LOGIN);
                 behavior.onUnavailable();
+                if (definition.auth().mode() != AuthMode.NONE) {
+                    // AuthMe's modern UI can be presented before the first
+                    // PLAY transition, so the timeout must begin at LOGIN.
+                    scheduleAuthenticationTimeout(currentGeneration);
+                }
                 if (connectedAt == null) {
                     connectedAt = Instant.now();
                 }
@@ -368,6 +376,7 @@ public final class BotSession implements BehaviorTarget {
             completeAuthentication(currentGeneration);
             return;
         }
+        scheduleAuthenticationTimeout(currentGeneration);
         executor.schedule(() -> {
             if (!isPlayable(currentGeneration) || authCompleted.get()) {
                 return;
@@ -433,6 +442,30 @@ public final class BotSession implements BehaviorTarget {
         lastDisconnectReason = "authentication failed: " + category.name();
         event("AUTH_FAILED", category.name());
         logger.warn("Bot {} stopped after authentication failure: {}", definition.id(), category);
+        stopAfterAuthenticationFailure();
+    }
+
+    private void scheduleAuthenticationTimeout(long currentGeneration) {
+        long timeout = definition.auth().timeoutMillis();
+        if (timeout <= 0) {
+            return;
+        }
+        if (authenticationTimeoutTask != null && !authenticationTimeoutTask.isDone()) {
+            return;
+        }
+        authenticationTimeoutTask = executor.schedule(() -> {
+            if (!isCurrent(currentGeneration) || authCompleted.get() || !terminalFailure.compareAndSet(false, true)) {
+                return;
+            }
+            lastDisconnectReason = "authentication timed out after " + timeout + " ms";
+            event("AUTH_TIMEOUT", Long.toString(timeout));
+            logger.warn("Bot {} stopped after authentication timed out after {} ms", definition.id(), timeout);
+            stopAfterAuthenticationFailure();
+        }, timeout, TimeUnit.MILLISECONDS);
+    }
+
+    private void stopAfterAuthenticationFailure() {
+        cancelAuthenticationTimeout();
         manualStop.set(true);
         cancelReconnect();
         cancelServerSwitch();
@@ -504,6 +537,7 @@ public final class BotSession implements BehaviorTarget {
         if (!isPlayable(currentGeneration) || !authCompleted.compareAndSet(false, true)) {
             return;
         }
+        cancelAuthenticationTimeout();
         if (!definition.targetServer().isBlank() && !definition.serverSwitchCommand().isBlank()) {
             if (playTransitionsThisConnection.get() > 1) {
                 serverSwitchAttempts.set(0);
@@ -610,8 +644,13 @@ public final class BotSession implements BehaviorTarget {
         lastDisconnectAt = Instant.now();
         protocolResolver.invalidateAutomaticDetection();
         cancelServerSwitch();
+        cancelAuthenticationTimeout();
         behavior.onUnavailable();
-        lastDisconnectReason = reason;
+        // An operator-actionable authentication failure is more useful than
+        // the synthetic disconnect reason used to close the transport.
+        if (!terminalFailure.get()) {
+            lastDisconnectReason = reason;
+        }
         event("DISCONNECTED", reason);
         if (cause != null) {
             logger.warn("Bot {} disconnected: {}", definition.id(), reason, cause);
@@ -692,6 +731,13 @@ public final class BotSession implements BehaviorTarget {
         if (serverSwitchTask != null) {
             serverSwitchTask.cancel(false);
             serverSwitchTask = null;
+        }
+    }
+
+    private synchronized void cancelAuthenticationTimeout() {
+        if (authenticationTimeoutTask != null) {
+            authenticationTimeoutTask.cancel(false);
+            authenticationTimeoutTask = null;
         }
     }
 
