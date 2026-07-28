@@ -50,6 +50,20 @@ wait_for_log() {
   die "Did not find /$pattern/ in $file within ${timeout}s"
 }
 
+wait_for_new_log() {
+  local file="$1" pattern="$2" previous_lines="$3" timeout="$4"
+  local end=$((SECONDS + timeout))
+  local first_new_line=$((previous_lines + 1))
+  while (( SECONDS < end )); do
+    if [[ -f "$file" ]] && tail -n "+$first_new_line" "$file" 2>/dev/null | grep -Eq "$pattern"; then
+      return 0
+    fi
+    sleep 1
+  done
+  tail -n 160 "$file" 2>/dev/null || true
+  die "Did not find a new /$pattern/ in $file within ${timeout}s"
+}
+
 download_fill_artifact() {
   local project="$1" version="$2" destination="$3" response url
   response="$(curl --fail --retry 3 --connect-timeout 20 --max-time 90 --silent --show-error \
@@ -171,6 +185,17 @@ runtime:
     multiplier: 1.0
     jitter: 0.0
     maximum-attempts: 6
+  # Keeps the integration bot assigned to AFK. This deliberately retries the
+  # assignment after a backend/network interruption so the test can prove the
+  # bot returns to the recovered backend rather than merely proving its port
+  # opens again.
+  presence-rules:
+    - id: "maintain-afk"
+      server: "afk"
+      selector: "IntegrationBot"
+      minimum-bots: 1
+      maximum-humans: 10
+      interval-ms: 750
 bots:
   IntegrationBot:
     enabled: true
@@ -265,13 +290,17 @@ wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
 wait_for_log "$VELOCITY_LOG" '(submitting its (login|registration) command|matched authentication success)' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
+wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
 
-log "Fault test: restart AFK backend"
+log "Fault test: interrupt AFK backend, then prove the presence rule restores the bot"
+velocity_log_lines=$(wc -l < "$VELOCITY_LOG")
 kill "$AFK_PID"
 wait "$AFK_PID" || true
 sleep 2
 start_paper afk "$AFK_PORT"
 wait_for_log "$WORK_ROOT/afk/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
+wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
+wait_for_new_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' "$velocity_log_lines" 90
 
 log "Fault test: restart Velocity; enabled bot must return to PLAY"
 restart_velocity
