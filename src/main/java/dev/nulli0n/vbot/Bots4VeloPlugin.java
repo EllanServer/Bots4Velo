@@ -24,6 +24,7 @@ import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
 import dev.nulli0n.vbot.config.ManagedBotStore;
 import dev.nulli0n.vbot.message.PluginMessages;
+import dev.nulli0n.vbot.observe.PrometheusExporter;
 import dev.nulli0n.vbot.observe.WebhookNotifier;
 import dev.nulli0n.vbot.protocol.VelocityBackendProtocolDetector;
 import org.slf4j.Logger;
@@ -56,6 +57,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private final ConcurrentMap<String, ScheduledTask> followTasks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> scheduledActions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> presenceTasks = new ConcurrentHashMap<>();
+    private volatile PrometheusExporter prometheusExporter;
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -77,6 +79,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startConfiguredFollows(config);
             startConfiguredSchedules(config);
             startPresenceRules(config);
+            startPrometheus(manager, config);
             Bots4VeloApiProvider.register(this);
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
@@ -121,6 +124,8 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             presenceTasks.values().forEach(ScheduledTask::cancel);
             presenceTasks.clear();
             startPresenceRules(replacementConfig);
+            stopPrometheus();
+            startPrometheus(replacement, replacementConfig);
             return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
         catch (RuntimeException exception) {
@@ -179,6 +184,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         scheduledActions.clear();
         presenceTasks.values().forEach(ScheduledTask::cancel);
         presenceTasks.clear();
+        stopPrometheus();
         BotManager active = manager;
         if (active != null) {
             active.close();
@@ -436,6 +442,29 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             catch (IllegalArgumentException exception) {
                 logger.warn("Ignoring invalid runtime.webhook-url", exception);
             }
+        }
+    }
+
+    private void startPrometheus(BotManager candidate, BotPluginConfig candidateConfig) {
+        int port = candidateConfig.runtime().prometheusPort();
+        if (port <= 0) {
+            return;
+        }
+        try {
+            prometheusExporter = new PrometheusExporter(candidateConfig.runtime().prometheusAddress(), port,
+                candidate::snapshots, logger);
+        }
+        catch (IOException exception) {
+            logger.error("Could not start Prometheus metrics on {}:{}",
+                candidateConfig.runtime().prometheusAddress(), port, exception);
+        }
+    }
+
+    private void stopPrometheus() {
+        PrometheusExporter active = prometheusExporter;
+        prometheusExporter = null;
+        if (active != null) {
+            active.close();
         }
     }
 

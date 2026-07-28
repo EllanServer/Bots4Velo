@@ -31,6 +31,7 @@ class ConfigLoaderTest {
         assertThat(config.bots().get("farm01").serverSwitchMaximumAttempts()).isZero();
         assertThat(config.bots().get("farm01").protocolDetectionServer()).isBlank();
         assertThat(config.runtime().maximumBots()).isEqualTo(32);
+        assertThat(config.runtime().prometheusPort()).isZero();
         assertThat(config.bots().get("farm01").auth().timeoutMillis()).isEqualTo(30_000L);
     }
 
@@ -56,6 +57,26 @@ class ConfigLoaderTest {
             """))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("timeout-ms");
+    }
+
+    @Test
+    void parsesPrometheusEndpointAndRejectsInvalidPort() {
+        BotPluginConfig config = parse("""
+            runtime:
+              prometheus-address: 0.0.0.0
+              prometheus-port: 9108
+            bots: {}
+            """);
+
+        assertThat(config.runtime().prometheusAddress()).isEqualTo("0.0.0.0");
+        assertThat(config.runtime().prometheusPort()).isEqualTo(9_108);
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              prometheus-port: 65536
+            bots: {}
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("prometheus-port");
     }
 
     @Test

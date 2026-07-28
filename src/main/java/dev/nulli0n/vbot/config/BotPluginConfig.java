@@ -36,12 +36,15 @@ public record BotPluginConfig(
         ReconnectConfig reconnect,
         List<ScheduledAction> schedules,
         String webhookUrl,
-        List<PresenceRule> presenceRules
+        List<PresenceRule> presenceRules,
+        String prometheusAddress,
+        int prometheusPort
     ) {
         public RuntimeConfig {
             schedules = List.copyOf(schedules);
             webhookUrl = webhookUrl == null ? "" : webhookUrl.trim();
             presenceRules = List.copyOf(presenceRules);
+            prometheusAddress = prometheusAddress == null ? "127.0.0.1" : prometheusAddress.trim();
         }
 
         public RuntimeConfig(
@@ -55,7 +58,8 @@ public record BotPluginConfig(
             ReconnectConfig reconnect
         ) {
             this(autoStartDelayMillis, spawnIntervalMillis, maximumBots, commandIntervalMillis,
-                resourcePackStepDelayMillis, resourcePackMode, autoRespawn, reconnect, List.of(), "", List.of());
+                resourcePackStepDelayMillis, resourcePackMode, autoRespawn, reconnect, List.of(), "", List.of(),
+                "127.0.0.1", 0);
         }
     }
 

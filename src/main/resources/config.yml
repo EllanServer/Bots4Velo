@@ -38,6 +38,10 @@ runtime:
   schedules: []
   # Optional JSON webhook receiving lifecycle events. Empty disables it.
   webhook-url: ""
+  # Optional Prometheus endpoint. Set a non-zero port to expose /metrics.
+  # Keep the default loopback address unless a monitoring network is trusted.
+  prometheus-address: "127.0.0.1"
+  prometheus-port: 0
   # Keep bots on an otherwise empty backend, then stop them when people join.
   presence-rules: []
   # Example:

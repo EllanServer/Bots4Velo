@@ -25,7 +25,8 @@ public enum FailureCategory {
             return BANNED_OR_KICKED;
         }
         if (value.contains("incorrect password") || value.contains("wrong password")
-            || value.contains("invalid password") || value.contains("authentication failed")) {
+            || value.contains("invalid password") || value.contains("authentication failed")
+            || value.contains("authentication timed out")) {
             return AUTHENTICATION;
         }
         if (value.contains("backend") || value.contains("server switch") || value.contains("unable to connect")

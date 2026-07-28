@@ -119,7 +119,9 @@ public final class ConfigLoader {
             reconnectConfig,
             parseSchedules(runtime.get("schedules")),
             text(runtime, "webhook-url", ""),
-            parsePresenceRules(runtime.get("presence-rules"))
+            parsePresenceRules(runtime.get("presence-rules")),
+            text(runtime, "prometheus-address", "127.0.0.1"),
+            integer(runtime, "prometheus-port", 0, 0, 65_535)
         );
 
         Map<String, Object> templates = section(root, "templates");
