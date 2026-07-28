@@ -276,6 +276,11 @@ class ConfigLoaderTest {
                   selector: "@tag:lobby"
                   server: survival
                   interval-ms: 120000
+                - id: daily-shutdown
+                  action: stop
+                  selector: "@group:farm"
+                  at: "03:30"
+                  timezone: "Asia/Singapore"
               presence-rules:
                 - id: keep-lobby-warm
                   server: lobby
@@ -289,13 +294,44 @@ class ConfigLoaderTest {
                 password: secret
             """);
 
-        assertThat(config.runtime().schedules()).hasSize(2);
+        assertThat(config.runtime().schedules()).hasSize(3);
         assertThat(config.runtime().schedules().getFirst().selector()).isEqualTo("@group:farm");
         assertThat(config.runtime().schedules().get(1).server()).isEqualTo("survival");
+        assertThat(config.runtime().schedules().get(2)).satisfies(schedule -> {
+            assertThat(schedule.runsDailyAtConfiguredTime()).isTrue();
+            assertThat(schedule.at()).isEqualTo("03:30");
+            assertThat(schedule.timezone()).isEqualTo("Asia/Singapore");
+        });
         assertThat(config.runtime().presenceRules()).singleElement().satisfies(rule -> {
             assertThat(rule.server()).isEqualTo("lobby");
             assertThat(rule.minimumBots()).isOne();
         });
+    }
+
+    @Test
+    void rejectsInvalidDailyScheduleTimeAndTimezone() {
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              schedules:
+                - id: invalid-time
+                  action: start
+                  selector: all
+                  at: "3pm"
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid-time.at must use HH:mm");
+
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              schedules:
+                - id: invalid-zone
+                  action: start
+                  selector: all
+                  at: "03:00"
+                  timezone: "Moon/Base"
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid-zone.timezone is invalid");
     }
 
     private static BotPluginConfig parse(String yaml) {

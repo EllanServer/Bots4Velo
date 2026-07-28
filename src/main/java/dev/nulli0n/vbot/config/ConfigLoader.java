@@ -20,6 +20,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -362,9 +366,25 @@ public final class ConfigLoader {
             if (action.equals("server") && server.isBlank()) {
                 throw new IllegalArgumentException("runtime.schedules." + id + ".server is required for server action");
             }
+            String at = text(schedule, "at", "");
+            String timezone = text(schedule, "timezone", "UTC");
+            if (!at.isBlank()) {
+                try {
+                    LocalTime.parse(at, DateTimeFormatter.ofPattern("HH:mm"));
+                }
+                catch (DateTimeParseException exception) {
+                    throw new IllegalArgumentException("runtime.schedules." + id + ".at must use HH:mm", exception);
+                }
+                try {
+                    ZoneId.of(timezone);
+                }
+                catch (java.time.DateTimeException exception) {
+                    throw new IllegalArgumentException("runtime.schedules." + id + ".timezone is invalid", exception);
+                }
+            }
             result.add(new BotPluginConfig.ScheduledAction(id, action, selector, server,
                 longValue(schedule, "initial-delay-ms", 0L, 0L, 86_400_000L),
-                longValue(schedule, "interval-ms", 60_000L, 1_000L, 604_800_000L)));
+                longValue(schedule, "interval-ms", 60_000L, 1_000L, 604_800_000L), at, timezone));
         }
         return List.copyOf(result);
     }

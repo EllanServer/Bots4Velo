@@ -33,6 +33,10 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -419,11 +423,26 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
 
     private void startConfiguredSchedules(BotPluginConfig candidate) {
         for (BotPluginConfig.ScheduledAction action : candidate.runtime().schedules()) {
+            ScheduleTiming timing = scheduleTiming(action);
             ScheduledTask task = proxy.getScheduler().buildTask(this, () -> runScheduledAction(action))
-                .delay(Duration.ofMillis(action.initialDelayMillis()))
-                .repeat(Duration.ofMillis(action.intervalMillis())).schedule();
+                .delay(timing.initialDelay())
+                .repeat(timing.interval()).schedule();
             scheduledActions.put(action.id().toLowerCase(java.util.Locale.ROOT), task);
         }
+    }
+
+    private ScheduleTiming scheduleTiming(BotPluginConfig.ScheduledAction action) {
+        if (!action.runsDailyAtConfiguredTime()) {
+            return new ScheduleTiming(Duration.ofMillis(action.initialDelayMillis()),
+                Duration.ofMillis(action.intervalMillis()));
+        }
+        ZoneId timezone = ZoneId.of(action.timezone());
+        ZonedDateTime now = ZonedDateTime.now(timezone);
+        ZonedDateTime next = now.with(LocalTime.parse(action.at(), DateTimeFormatter.ofPattern("HH:mm")));
+        if (!next.isAfter(now)) {
+            next = next.plusDays(1);
+        }
+        return new ScheduleTiming(Duration.between(now, next), Duration.ofDays(1));
     }
 
     private void runScheduledAction(BotPluginConfig.ScheduledAction action) {
@@ -584,6 +603,9 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     public record ReloadResult(int configuredBots, int managedBots) {
+    }
+
+    private record ScheduleTiming(Duration initialDelay, Duration interval) {
     }
 
     public record FollowResult(boolean successful, String detail) {

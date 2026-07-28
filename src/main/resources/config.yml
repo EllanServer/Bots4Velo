@@ -55,8 +55,10 @@ runtime:
   # - id: nightly-farm-reconnect
   #   action: reconnect
   #   selector: "@group:farm"
-  #   initial-delay-ms: 0
-  #   interval-ms: 3600000
+  #   # Either use a relative interval, or run every day at a server-local
+  #   # wall-clock time. Quote HH:mm so YAML preserves the value as text.
+  #   at: "03:00"
+  #   timezone: "Asia/Singapore"
 
 # Templates are merged in order; bot fields always override template fields.
 # Put passwords in plugins/bots4velo/secrets.yml or a password-env variable

@@ -207,8 +207,9 @@ bots:
 行为和登录后命令均可使用 `{id}`、`{username}`、`{password}` 与 `{server}` 占位符。
 
 `runtime.schedules` 支持重复执行 `start`、`stop`、`reconnect` 或 `server` 操作；每项指定唯一
-`id`、`selector`、`initial-delay-ms` 与 `interval-ms`，`server` 操作另需指定 `server`。它适合定时
-上线、离线、重连和跨服轮换，所有操作仍通过已有的连接限速与认证检查。
+`id` 与 `selector`，`server` 操作另需指定 `server`。可使用 `initial-delay-ms` 与 `interval-ms` 做相对
+间隔，也可用 `at: "HH:mm"` 和 IANA `timezone`（例如 `Asia/Singapore`）每天在指定时刻上线、离线、重连
+或跨服；未指定 `timezone` 时使用 `UTC`。所有操作仍通过已有的连接限速与认证检查。
 
 `/vbot history <id>` 显示最近 50 条连接、认证、切服和断线事件。`/vbot monitor` 还包含
 `onlineSeconds`、`failureCategory`、行为状态与事件列表，便于外部采集器判断不稳定重连和认证失败。

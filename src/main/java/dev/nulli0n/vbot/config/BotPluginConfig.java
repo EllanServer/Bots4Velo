@@ -78,8 +78,29 @@ public record BotPluginConfig(
         String selector,
         String server,
         long initialDelayMillis,
-        long intervalMillis
+        long intervalMillis,
+        String at,
+        String timezone
     ) {
+        public ScheduledAction {
+            at = at == null ? "" : at.trim();
+            timezone = timezone == null || timezone.isBlank() ? "UTC" : timezone.trim();
+        }
+
+        public ScheduledAction(
+            String id,
+            String action,
+            String selector,
+            String server,
+            long initialDelayMillis,
+            long intervalMillis
+        ) {
+            this(id, action, selector, server, initialDelayMillis, intervalMillis, "", "UTC");
+        }
+
+        public boolean runsDailyAtConfiguredTime() {
+            return !at.isBlank();
+        }
     }
 
     public record PresenceRule(
