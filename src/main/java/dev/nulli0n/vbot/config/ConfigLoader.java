@@ -116,7 +116,10 @@ public final class ConfigLoader {
             enumValue(ResourcePackMode.class, text(runtime, "resource-pack-mode", "ACCEPT_WITHOUT_DOWNLOAD"),
                 "runtime.resource-pack-mode"),
             bool(runtime, "auto-respawn", true),
-            reconnectConfig
+            reconnectConfig,
+            parseSchedules(runtime.get("schedules")),
+            text(runtime, "webhook-url", ""),
+            parsePresenceRules(runtime.get("presence-rules"))
         );
 
         Map<String, Object> templates = section(root, "templates");
@@ -158,7 +161,8 @@ public final class ConfigLoader {
                 longValue(auth, "after-auth-delay-ms", 1_500, 0, 60_000),
                 stringList(auth.get("login-prompts")),
                 stringList(auth.get("register-prompts")),
-                stringList(auth.get("success-messages"))
+                stringList(auth.get("success-messages")),
+                stringList(auth.get("failure-messages"))
             );
             String username = text(bot, "username", id);
             validateUsername(username, id);
@@ -327,6 +331,63 @@ public final class ConfigLoader {
         }
         return new BehaviorConfig(mode, enabled, interval, radius, yawStep, randomYaw, jump, swing, sneak, commands, path,
             serverCycle, serverCycleEvery, followPlayer);
+    }
+
+    private static List<BotPluginConfig.ScheduledAction> parseSchedules(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<BotPluginConfig.ScheduledAction> result = new ArrayList<>();
+        Set<String> ids = new HashSet<>();
+        for (Object entry : list) {
+            Map<String, Object> schedule = castMap(entry, "runtime.schedules");
+            String id = text(schedule, "id", "");
+            if (!id.matches("[A-Za-z0-9_-]{1,32}") || !ids.add(id.toLowerCase(Locale.ROOT))) {
+                throw new IllegalArgumentException("runtime.schedules requires unique id values");
+            }
+            String action = text(schedule, "action", "").toLowerCase(Locale.ROOT);
+            if (!List.of("start", "stop", "reconnect", "server").contains(action)) {
+                throw new IllegalArgumentException("runtime.schedules." + id + ".action is invalid");
+            }
+            String selector = text(schedule, "selector", "");
+            if (selector.isBlank()) {
+                throw new IllegalArgumentException("runtime.schedules." + id + ".selector is required");
+            }
+            String server = text(schedule, "server", "");
+            if (action.equals("server") && server.isBlank()) {
+                throw new IllegalArgumentException("runtime.schedules." + id + ".server is required for server action");
+            }
+            result.add(new BotPluginConfig.ScheduledAction(id, action, selector, server,
+                longValue(schedule, "initial-delay-ms", 0L, 0L, 86_400_000L),
+                longValue(schedule, "interval-ms", 60_000L, 1_000L, 604_800_000L)));
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<BotPluginConfig.PresenceRule> parsePresenceRules(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<BotPluginConfig.PresenceRule> result = new ArrayList<>();
+        Set<String> ids = new HashSet<>();
+        for (Object entry : list) {
+            Map<String, Object> rule = castMap(entry, "runtime.presence-rules");
+            String id = text(rule, "id", "");
+            if (!id.matches("[A-Za-z0-9_-]{1,32}") || !ids.add(id.toLowerCase(Locale.ROOT))) {
+                throw new IllegalArgumentException("runtime.presence-rules requires unique id values");
+            }
+            String server = text(rule, "server", "");
+            String selector = text(rule, "selector", "");
+            if (server.isBlank() || selector.isBlank()) {
+                throw new IllegalArgumentException("runtime.presence-rules." + id
+                    + " requires server and selector");
+            }
+            result.add(new BotPluginConfig.PresenceRule(id, server, selector,
+                integer(rule, "minimum-bots", 1, 0, 1_000),
+                integer(rule, "maximum-humans", 0, 0, 1_000),
+                longValue(rule, "interval-ms", 30_000L, 1_000L, 3_600_000L)));
+        }
+        return List.copyOf(result);
     }
 
     private static List<BehaviorPoint> behaviorPath(Object value, String id) {

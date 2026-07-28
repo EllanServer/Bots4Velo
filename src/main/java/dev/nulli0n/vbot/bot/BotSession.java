@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
@@ -29,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 public final class BotSession implements BehaviorTarget {
@@ -42,8 +44,11 @@ public final class BotSession implements BehaviorTarget {
     private final Logger logger;
     private final ReconnectPolicy reconnectPolicy;
     private final BotBehaviorRunner behavior;
+    private final BotEventLog events;
+    private final Consumer<BotEvent> eventSink;
     private final AtomicReference<BotState> state = new AtomicReference<>(BotState.STOPPED);
     private final AtomicBoolean manualStop = new AtomicBoolean(true);
+    private final AtomicBoolean terminalFailure = new AtomicBoolean();
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
     private final AtomicLong generation = new AtomicLong();
     private final AtomicBoolean loginSent = new AtomicBoolean();
@@ -64,6 +69,7 @@ public final class BotSession implements BehaviorTarget {
     private final List<Pattern> loginPrompts;
     private final List<Pattern> registerPrompts;
     private final List<Pattern> successMessages;
+    private final List<Pattern> failureMessages;
 
     private volatile BotTransport transport;
     private volatile ScheduledFuture<?> reconnectTask;
@@ -81,6 +87,14 @@ public final class BotSession implements BehaviorTarget {
                       ProtocolResolver protocolResolver, TransportRegistry transportRegistry,
                       ConnectionRateLimiter connectionRateLimiter,
                       ScheduledExecutorService executor, Logger logger) {
+        this(definition, endpoint, runtime, protocolResolver, transportRegistry, connectionRateLimiter, executor,
+            logger, ignored -> { });
+    }
+
+    public BotSession(BotDefinition definition, ProxyEndpoint endpoint, RuntimeConfig runtime,
+                      ProtocolResolver protocolResolver, TransportRegistry transportRegistry,
+                      ConnectionRateLimiter connectionRateLimiter,
+                      ScheduledExecutorService executor, Logger logger, Consumer<BotEvent> eventSink) {
         this.definition = definition;
         this.endpoint = endpoint;
         this.runtime = runtime;
@@ -89,11 +103,14 @@ public final class BotSession implements BehaviorTarget {
         this.connectionRateLimiter = connectionRateLimiter;
         this.executor = executor;
         this.logger = logger;
+        this.eventSink = eventSink == null ? ignored -> { } : eventSink;
+        this.events = new BotEventLog(definition.id());
         this.reconnectPolicy = new ReconnectPolicy(runtime.reconnect());
         this.behavior = new BotBehaviorRunner(this, definition.behavior(), executor, logger);
         this.loginPrompts = compile(definition.auth().loginPrompts());
         this.registerPrompts = compile(definition.auth().registerPrompts());
         this.successMessages = compile(definition.auth().successMessages());
+        this.failureMessages = compile(definition.auth().failureMessages());
     }
 
     public BotDefinition definition() {
@@ -101,20 +118,24 @@ public final class BotSession implements BehaviorTarget {
     }
 
     public BotSnapshot snapshot() {
+        long onlineSeconds = connectedAt == null ? 0L : Math.max(0L, Duration.between(connectedAt, Instant.now()).toSeconds());
         return new BotSnapshot(definition.id(), definition.username(), activeProtocol, activeProtocolSource, state.get(),
             reconnectAttempts.get(), connectedAt, playEntries.get(), disconnects.get(),
             resourcePacksLoaded.get(), lastPlayAt, lastDisconnectAt, position(), lastAuthenticationUi.get(),
             authenticationUiPresentations.get(), authenticationUiSubmissions.get(), lastDisconnectReason,
-            behavior.snapshot());
+            behavior.snapshot(), onlineSeconds, FailureCategory.classify(lastDisconnectReason), events.snapshot());
     }
 
     public void start() {
         manualStop.set(false);
+        terminalFailure.set(false);
+        event("START_REQUESTED", "operator or automatic startup");
         scheduleConnection(0);
     }
 
     public void stop() {
         manualStop.set(true);
+        event("STOPPED", "operator request");
         generation.incrementAndGet();
         cancelReconnect();
         cancelServerSwitch();
@@ -131,6 +152,8 @@ public final class BotSession implements BehaviorTarget {
 
     public void reconnectNow() {
         manualStop.set(false);
+        terminalFailure.set(false);
+        event("RECONNECT_REQUESTED", "operator request");
         cancelReconnect();
         cancelServerSwitch();
         behavior.onUnavailable();
@@ -264,6 +287,7 @@ public final class BotSession implements BehaviorTarget {
             logger.info("Bot {} ({}) connecting to {}:{} using protocol {} detected via {}",
                 definition.id(), definition.username(), endpoint.address(), endpoint.port(), activeProtocol,
                 activeProtocolSource);
+            event("CONNECTING", activeProtocol + " via " + activeProtocolSource);
             created.connect();
         }
         catch (Exception exception) {
@@ -302,6 +326,7 @@ public final class BotSession implements BehaviorTarget {
                     connectedAt = Instant.now();
                 }
                 lastDisconnectReason = "connected";
+                event("CONNECTED", activeProtocol);
             }
             case CONFIGURATION -> {
                 state.set(BotState.CONFIGURATION);
@@ -318,6 +343,7 @@ public final class BotSession implements BehaviorTarget {
                     playEntries.incrementAndGet();
                     lastPlayAt = Instant.now();
                     logger.info("Bot {} entered PLAY using {}", definition.id(), activeProtocol);
+                    event("PLAY", activeProtocol);
                     if (preJoinAuthSubmitted.get()) {
                         logger.info("Bot {} completed authentication through a pre-join UI", definition.id());
                         completeAuthentication(currentGeneration);
@@ -377,20 +403,45 @@ public final class BotSession implements BehaviorTarget {
         if (!isCurrent(currentGeneration) || authCompleted.get() || definition.auth().mode() == AuthMode.NONE) {
             return;
         }
-        if (matches(successMessages, message)) {
+        if (matches(failureMessages, message)) {
+            failAuthentication(currentGeneration, message);
+        }
+        else if (matches(successMessages, message)) {
             logger.info("Bot {} matched an authentication success message", definition.id());
+            event("AUTHENTICATED", "success message");
             completeAuthentication(currentGeneration);
         }
         else if (matches(registerPrompts, message)) {
             logger.info("Bot {} matched a registration prompt", definition.id());
+            event("AUTH_PROMPT", "registration");
             sendRegister();
             scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
         else if (matches(loginPrompts, message)) {
             logger.info("Bot {} matched a login prompt", definition.id());
+            event("AUTH_PROMPT", "login");
             sendLogin();
             scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
+    }
+
+    private void failAuthentication(long currentGeneration, String message) {
+        if (!isCurrent(currentGeneration) || !terminalFailure.compareAndSet(false, true)) {
+            return;
+        }
+        FailureCategory category = FailureCategory.classify(message);
+        lastDisconnectReason = "authentication failed: " + category.name();
+        event("AUTH_FAILED", category.name());
+        logger.warn("Bot {} stopped after authentication failure: {}", definition.id(), category);
+        manualStop.set(true);
+        cancelReconnect();
+        cancelServerSwitch();
+        behavior.onUnavailable();
+        BotTransport active = transport;
+        if (active != null) {
+            active.disconnect("Authentication requires operator intervention");
+        }
+        state.set(BotState.FAILED);
     }
 
     private void handleAuthenticationUi(long currentGeneration, AuthenticationUiChallenge challenge) {
@@ -420,6 +471,7 @@ public final class BotSession implements BehaviorTarget {
         else {
             authenticationUiSubmissions.incrementAndGet();
             logger.info("Bot {} submitted the AuthMe pre-join {} UI", definition.id(), type);
+            event("AUTH_UI", type.name());
         }
     }
 
@@ -516,6 +568,7 @@ public final class BotSession implements BehaviorTarget {
         cancelServerSwitchTaskOnly();
         logger.info("Bot {} confirmed server switch to {} after {} attempt(s)",
             definition.id(), definition.targetServer(), serverSwitchAttempts.get());
+        event("SERVER_SWITCHED", definition.targetServer());
         scheduleAfterLoginCommands(currentGeneration, definition.serverSwitchDelayMillis());
     }
 
@@ -559,6 +612,7 @@ public final class BotSession implements BehaviorTarget {
         cancelServerSwitch();
         behavior.onUnavailable();
         lastDisconnectReason = reason;
+        event("DISCONNECTED", reason);
         if (cause != null) {
             logger.warn("Bot {} disconnected: {}", definition.id(), reason, cause);
         }
@@ -566,7 +620,10 @@ public final class BotSession implements BehaviorTarget {
             logger.info("Bot {} disconnected: {}", definition.id(), reason);
         }
         transport = null;
-        if (manualStop.get()) {
+        if (terminalFailure.get()) {
+            state.set(BotState.FAILED);
+        }
+        else if (manualStop.get()) {
             state.set(BotState.STOPPED);
         }
         else {
@@ -661,6 +718,14 @@ public final class BotSession implements BehaviorTarget {
 
     private static boolean matches(List<Pattern> patterns, String value) {
         return patterns.stream().anyMatch(pattern -> pattern.matcher(value).find());
+    }
+
+    private void event(String type, String detail) {
+        events.add(type, detail);
+        List<BotEvent> snapshot = events.snapshot();
+        if (!snapshot.isEmpty()) {
+            eventSink.accept(snapshot.getLast());
+        }
     }
 
     private final class SessionTransportListener implements TransportListener {

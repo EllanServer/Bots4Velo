@@ -33,8 +33,30 @@ public record BotPluginConfig(
         long resourcePackStepDelayMillis,
         ResourcePackMode resourcePackMode,
         boolean autoRespawn,
-        ReconnectConfig reconnect
+        ReconnectConfig reconnect,
+        List<ScheduledAction> schedules,
+        String webhookUrl,
+        List<PresenceRule> presenceRules
     ) {
+        public RuntimeConfig {
+            schedules = List.copyOf(schedules);
+            webhookUrl = webhookUrl == null ? "" : webhookUrl.trim();
+            presenceRules = List.copyOf(presenceRules);
+        }
+
+        public RuntimeConfig(
+            long autoStartDelayMillis,
+            long spawnIntervalMillis,
+            int maximumBots,
+            long commandIntervalMillis,
+            long resourcePackStepDelayMillis,
+            ResourcePackMode resourcePackMode,
+            boolean autoRespawn,
+            ReconnectConfig reconnect
+        ) {
+            this(autoStartDelayMillis, spawnIntervalMillis, maximumBots, commandIntervalMillis,
+                resourcePackStepDelayMillis, resourcePackMode, autoRespawn, reconnect, List.of(), "", List.of());
+        }
     }
 
     public record ReconnectConfig(
@@ -43,6 +65,26 @@ public record BotPluginConfig(
         double multiplier,
         double jitter,
         int maximumAttempts
+    ) {
+    }
+
+    public record ScheduledAction(
+        String id,
+        String action,
+        String selector,
+        String server,
+        long initialDelayMillis,
+        long intervalMillis
+    ) {
+    }
+
+    public record PresenceRule(
+        String id,
+        String server,
+        String selector,
+        int minimumBots,
+        int maximumHumans,
+        long intervalMillis
     ) {
     }
 
@@ -147,12 +189,29 @@ public record BotPluginConfig(
         long afterAuthDelayMillis,
         List<String> loginPrompts,
         List<String> registerPrompts,
-        List<String> successMessages
+        List<String> successMessages,
+        List<String> failureMessages
     ) {
         public AuthConfig {
             loginPrompts = List.copyOf(loginPrompts);
             registerPrompts = List.copyOf(registerPrompts);
             successMessages = List.copyOf(successMessages);
+            failureMessages = List.copyOf(failureMessages);
+        }
+
+        public AuthConfig(
+            AuthMode mode,
+            String loginCommand,
+            String registerCommand,
+            long loginDelayMillis,
+            long fallbackRegisterDelayMillis,
+            long afterAuthDelayMillis,
+            List<String> loginPrompts,
+            List<String> registerPrompts,
+            List<String> successMessages
+        ) {
+            this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, List.of());
         }
     }
 

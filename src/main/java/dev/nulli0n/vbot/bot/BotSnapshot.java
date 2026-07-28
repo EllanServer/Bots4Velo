@@ -3,6 +3,7 @@ package dev.nulli0n.vbot.bot;
 import dev.nulli0n.vbot.transport.BotPosition;
 
 import java.time.Instant;
+import java.util.List;
 
 public record BotSnapshot(
     String id,
@@ -22,6 +23,9 @@ public record BotSnapshot(
     long authenticationUiPresentations,
     long authenticationUiSubmissions,
     String lastDisconnectReason,
-    BehaviorSnapshot behavior
+    BehaviorSnapshot behavior,
+    long onlineSeconds,
+    FailureCategory failureCategory,
+    List<BotEvent> recentEvents
 ) {
 }

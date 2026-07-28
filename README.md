@@ -56,7 +56,7 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 .\gradlew.bat clean check shadowJar
 ```
 
-默认产物位于 `build/libs/bots4velo-2.2.0.jar`；也可以通过
+默认产物位于 `build/libs/bots4velo-2.3.0.jar`；也可以通过
 `-PpluginVersion=<version>` 覆盖构建版本。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
 只需把这个 JAR 放入 Velocity 的 `plugins` 目录。首次启动会生成
@@ -69,16 +69,16 @@ MCProtocolLib 及其传递依赖冲突的设计结果。
 
 每次功能版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
 GitHub Release（附带 JAR 和自动生成的 Release Notes）。`vX.Y.0` 形式的标签会触发，
-例如 `v2.2.0`；修订版本标签（例如 `v2.2.1`）不会触发发布。普通 commit 和 Pull Request
+例如 `v2.3.0`；修订版本标签（例如 `v2.3.1`）不会触发发布。普通 commit 和 Pull Request
 由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
 ```powershell
-git tag v2.2.0
-git push origin v2.2.0
+git tag v2.3.0
+git push origin v2.3.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.2.0` 生成
-`bots4velo-2.2.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.3.0` 生成
+`bots4velo-2.3.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
 创建并推送对应标签。
 
 ## 首次联调
@@ -180,6 +180,25 @@ bots:
 执行 `/vbot behavior <id|selector> follow <player>`；机器人会自动跨服，并通过目标玩家执行的
 `/minecraft:tp` 跟随，因此目标玩家仍需目标后端的传送权限。`unfollow` 会停止该任务。
 行为和登录后命令均可使用 `{id}`、`{username}`、`{password}` 与 `{server}` 占位符。
+
+`runtime.schedules` 支持重复执行 `start`、`stop`、`reconnect` 或 `server` 操作；每项指定唯一
+`id`、`selector`、`initial-delay-ms` 与 `interval-ms`，`server` 操作另需指定 `server`。它适合定时
+上线、离线、重连和跨服轮换，所有操作仍通过已有的连接限速与认证检查。
+
+`/vbot history <id>` 显示最近 50 条连接、认证、切服和断线事件。`/vbot monitor` 还包含
+`onlineSeconds`、`failureCategory`、行为状态与事件列表，便于外部采集器判断不稳定重连和认证失败。
+认证配置的 `failure-messages` 可匹配密码错误、验证码、2FA 或封禁提示；匹配后机器人进入 `FAILED`
+并停止自动重连，管理员可修复账号后执行 `/vbot reconnect <id>`。
+
+其他 Velocity 插件可通过 `Bots4VeloApiProvider.get()` 获得 `Bots4VeloApi`，读取机器人快照、请求
+start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完成初始化时可用。
+
+若设置 `runtime.webhook-url`，Bots4Velo 会异步 POST 包含 `botId`、`type`、`detail` 和 `at` 的 JSON
+生命周期事件；留空则完全禁用。Webhook 失败只写 debug 日志，不会影响机器人运行。
+
+`runtime.presence-rules` 用于空服保活和动态缩容：当某后端的人类玩家数不高于
+`maximum-humans` 时，插件会从 `selector` 中启动最多 `minimum-bots` 个机器人并切至该后端；
+人数上升后则停止这些明确由规则管理的机器人。后端不可用时，已有的重连与切服重试策略继续生效。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
 主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用

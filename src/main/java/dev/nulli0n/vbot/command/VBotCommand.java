@@ -30,10 +30,10 @@ public final class VBotCommand implements SimpleCommand {
     private static final String RELOAD_PERMISSION = "bots4velo.reload";
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final List<String> ACTIONS = List.of(
-        "help", "list", "status", "monitor", "doctor", "servers", "server", "movehere",
+        "help", "list", "status", "monitor", "history", "doctor", "servers", "server", "movehere",
         "position", "move", "look", "behavior", "create", "remove", "start", "stop", "reconnect", "command", "reload");
     private static final List<String> BOT_ID_ACTIONS = List.of(
-        "status", "monitor", "server", "movehere", "position", "move", "look", "remove",
+        "status", "monitor", "history", "server", "movehere", "position", "move", "look", "remove",
         "start", "stop", "reconnect", "command", "behavior");
 
     private final Bots4VeloPlugin plugin;
@@ -63,6 +63,7 @@ public final class VBotCommand implements SimpleCommand {
                 case "list" -> list(source);
                 case "status" -> status(source, args);
                 case "monitor" -> monitor(source, args);
+                case "history" -> history(source, args);
                 case "doctor" -> doctor(source, args);
                 case "servers" -> servers(source, args);
                 case "server" -> server(source, args);
@@ -199,6 +200,20 @@ public final class VBotCommand implements SimpleCommand {
                 + ", auth-ui=" + snapshot.authenticationUiPresentations() + "/"
                 + snapshot.authenticationUiSubmissions(), color));
         }
+    }
+
+    private void history(CommandSource source, String[] args) {
+        if (args.length != 2) {
+            source.sendMessage(Component.text("Usage: /vbot history <id>", NamedTextColor.YELLOW));
+            return;
+        }
+        plugin.manager().find(args[1]).ifPresentOrElse(session -> {
+            BotSnapshot snapshot = session.snapshot();
+            source.sendMessage(Component.text("Recent events for " + snapshot.id() + " ("
+                + snapshot.recentEvents().size() + "/50):", NamedTextColor.GOLD));
+            snapshot.recentEvents().forEach(event -> source.sendMessage(Component.text(
+                event.at() + " " + event.type() + " - " + event.detail(), NamedTextColor.GRAY)));
+        }, () -> unknown(source, args[1]));
     }
 
     private void position(CommandSource source, String[] args) {
@@ -368,7 +383,7 @@ public final class VBotCommand implements SimpleCommand {
 
     private void moveHere(CommandSource source, String[] args) {
         if (args.length != 2) {
-            source.sendMessage(Component.text("Usage: /vbot movehere <id>", NamedTextColor.YELLOW));
+            source.sendMessage(Component.text("Usage: /vbot movehere <id|selector>", NamedTextColor.YELLOW));
             return;
         }
         if (!(source instanceof Player player)) {
@@ -385,15 +400,23 @@ public final class VBotCommand implements SimpleCommand {
             return;
         }
 
-        plugin.switchBotServer(args[1], targetServer).thenAccept(result -> {
-            if (!result.successful()) {
-                reportSwitch(source, result);
-                return;
-            }
-            long delay = result.status() == Bots4VeloPlugin.BotServerSwitchStatus.SWITCHED ? 750L : 0L;
-            plugin.proxy().getScheduler().buildTask(plugin, () -> finishMoveHere(player, result))
-                .delay(Duration.ofMillis(delay)).schedule();
-        });
+        List<dev.nulli0n.vbot.bot.BotSession> targets = plugin.selectBots(args[1]);
+        if (targets.isEmpty()) {
+            noMatches(source, args[1]);
+            return;
+        }
+        source.sendMessage(Component.text("movehere requested for " + targets.size() + " bot(s).", NamedTextColor.GREEN));
+        for (dev.nulli0n.vbot.bot.BotSession target : targets) {
+            plugin.switchBotServer(target.definition().id(), targetServer).thenAccept(result -> {
+                if (!result.successful()) {
+                    reportSwitch(source, result);
+                    return;
+                }
+                long delay = result.status() == Bots4VeloPlugin.BotServerSwitchStatus.SWITCHED ? 750L : 0L;
+                plugin.proxy().getScheduler().buildTask(plugin, () -> finishMoveHere(player, result))
+                    .delay(Duration.ofMillis(delay)).schedule();
+            });
+        }
     }
 
     private void finishMoveHere(Player player, BotServerSwitchResult result) {
@@ -509,10 +532,11 @@ public final class VBotCommand implements SimpleCommand {
             case 1 -> List.of(
                 "/vbot list - List bots, states and labels",
                 "/vbot status <id> - Show detailed status",
+                "/vbot history <id> - Show recent events",
                 "/vbot doctor [id|selector] - Diagnose setup",
                 "/vbot servers - List Velocity backends",
                 "/vbot server <id|selector> <server> - Switch server",
-                "/vbot movehere <id> - Bring a bot across servers",
+                "/vbot movehere <id|selector> - Bring bots across servers",
                 "/vbot position <id> - Show protocol position",
                 "/vbot move <id> <x> <y> <z> - Move",
                 "/vbot look <id> <yaw> <pitch> - Look");
@@ -568,7 +592,7 @@ public final class VBotCommand implements SimpleCommand {
             return true;
         }
         String permission = switch (action) {
-            case "help", "list", "status", "monitor", "doctor", "servers", "position" -> VIEW_PERMISSION;
+            case "help", "list", "status", "monitor", "history", "doctor", "servers", "position" -> VIEW_PERMISSION;
             case "create", "remove" -> CREATE_PERMISSION;
             case "reload" -> RELOAD_PERMISSION;
             default -> CONTROL_PERMISSION;
@@ -605,6 +629,10 @@ public final class VBotCommand implements SimpleCommand {
         result.put("authenticationUiPresentations", snapshot.authenticationUiPresentations());
         result.put("authenticationUiSubmissions", snapshot.authenticationUiSubmissions());
         result.put("lastDisconnectReason", snapshot.lastDisconnectReason());
+        result.put("onlineSeconds", snapshot.onlineSeconds());
+        result.put("failureCategory", snapshot.failureCategory().name());
+        result.put("recentEvents", snapshot.recentEvents().stream().map(event -> Map.of(
+            "at", event.at().toString(), "type", event.type(), "detail", event.detail())).toList());
         result.put("behavior", behaviorMap(snapshot.behavior()));
         return result;
     }

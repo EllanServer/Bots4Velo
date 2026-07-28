@@ -15,11 +15,16 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import dev.nulli0n.vbot.bot.BotManager;
 import dev.nulli0n.vbot.bot.BotSession;
+import dev.nulli0n.vbot.bot.BotSnapshot;
+import dev.nulli0n.vbot.bot.BotEvent;
+import dev.nulli0n.vbot.api.Bots4VeloApi;
+import dev.nulli0n.vbot.api.Bots4VeloApiProvider;
 import dev.nulli0n.vbot.command.VBotCommand;
 import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
 import dev.nulli0n.vbot.config.ManagedBotStore;
 import dev.nulli0n.vbot.message.PluginMessages;
+import dev.nulli0n.vbot.observe.WebhookNotifier;
 import dev.nulli0n.vbot.protocol.VelocityBackendProtocolDetector;
 import org.slf4j.Logger;
 
@@ -31,6 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.time.Duration;
+import java.util.function.Consumer;
 
 @Plugin(
     id = "bots4velo",
@@ -39,7 +45,7 @@ import java.time.Duration;
     description = "Embedded multi-version headless Minecraft clients for Velocity",
     authors = {"OpenAI Codex"}
 )
-public final class Bots4VeloPlugin {
+public final class Bots4VeloPlugin implements Bots4VeloApi {
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
@@ -48,6 +54,8 @@ public final class Bots4VeloPlugin {
     private volatile ManagedBotStore managedBotStore;
     private volatile PluginMessages messages;
     private final ConcurrentMap<String, ScheduledTask> followTasks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ScheduledTask> scheduledActions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ScheduledTask> presenceTasks = new ConcurrentHashMap<>();
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -63,9 +71,13 @@ public final class Bots4VeloPlugin {
             managedBotStore = ManagedBotStore.load(dataDirectory);
             config = ConfigLoader.load(dataDirectory, managedBotStore.definitions());
             manager = new BotManager(config, logger, new VelocityBackendProtocolDetector(proxy));
+            registerOptionalIntegrations(manager, config);
             registerCommand();
             manager.startEnabled();
             startConfiguredFollows(config);
+            startConfiguredSchedules(config);
+            startPresenceRules(config);
+            Bots4VeloApiProvider.register(this);
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
@@ -89,6 +101,7 @@ public final class Bots4VeloPlugin {
         BotPluginConfig replacementConfig = ConfigLoader.load(dataDirectory, replacementStore.definitions());
         BotManager replacement = new BotManager(replacementConfig, logger,
             new VelocityBackendProtocolDetector(proxy));
+        registerOptionalIntegrations(replacement, replacementConfig);
         try {
             BotManager previous = manager;
             managedBotStore = replacementStore;
@@ -102,6 +115,12 @@ public final class Bots4VeloPlugin {
             followTasks.values().forEach(ScheduledTask::cancel);
             followTasks.clear();
             startConfiguredFollows(replacementConfig);
+            scheduledActions.values().forEach(ScheduledTask::cancel);
+            scheduledActions.clear();
+            startConfiguredSchedules(replacementConfig);
+            presenceTasks.values().forEach(ScheduledTask::cancel);
+            presenceTasks.clear();
+            startPresenceRules(replacementConfig);
             return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
         catch (RuntimeException exception) {
@@ -153,8 +172,13 @@ public final class Bots4VeloPlugin {
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
+        Bots4VeloApiProvider.clear(this);
         followTasks.values().forEach(ScheduledTask::cancel);
         followTasks.clear();
+        scheduledActions.values().forEach(ScheduledTask::cancel);
+        scheduledActions.clear();
+        presenceTasks.values().forEach(ScheduledTask::cancel);
+        presenceTasks.clear();
         BotManager active = manager;
         if (active != null) {
             active.close();
@@ -167,6 +191,41 @@ public final class Bots4VeloPlugin {
             throw new IllegalStateException("Bot manager is not initialized");
         }
         return active;
+    }
+
+    @Override
+    public List<BotSnapshot> bots() {
+        return manager().snapshots();
+    }
+
+    @Override
+    public Optional<BotSnapshot> bot(String id) {
+        return manager().find(id).map(BotSession::snapshot);
+    }
+
+    @Override
+    public boolean start(String id) {
+        return manager().start(id);
+    }
+
+    @Override
+    public boolean stop(String id) {
+        return manager().stop(id);
+    }
+
+    @Override
+    public boolean reconnect(String id) {
+        return manager().reconnect(id);
+    }
+
+    @Override
+    public void addEventListener(Consumer<BotEvent> listener) {
+        manager().addEventListener(listener);
+    }
+
+    @Override
+    public void removeEventListener(Consumer<BotEvent> listener) {
+        manager().removeEventListener(listener);
     }
 
     public Logger logger() {
@@ -341,6 +400,76 @@ public final class Bots4VeloPlugin {
                 && definition.behavior().mode() == BotPluginConfig.BehaviorMode.FOLLOW
                 && !definition.behavior().followPlayer().isBlank())
             .forEach(definition -> startFollowing(definition.id(), definition.behavior().followPlayer()));
+    }
+
+    private void startConfiguredSchedules(BotPluginConfig candidate) {
+        for (BotPluginConfig.ScheduledAction action : candidate.runtime().schedules()) {
+            ScheduledTask task = proxy.getScheduler().buildTask(this, () -> runScheduledAction(action))
+                .delay(Duration.ofMillis(action.initialDelayMillis()))
+                .repeat(Duration.ofMillis(action.intervalMillis())).schedule();
+            scheduledActions.put(action.id().toLowerCase(java.util.Locale.ROOT), task);
+        }
+    }
+
+    private void runScheduledAction(BotPluginConfig.ScheduledAction action) {
+        List<BotSession> targets = selectBots(action.selector());
+        if (targets.isEmpty()) {
+            logger.debug("Scheduled action {} matched no bots", action.id());
+            return;
+        }
+        for (BotSession session : targets) {
+            switch (action.action()) {
+                case "start" -> manager().start(session.definition().id());
+                case "stop" -> manager().stop(session.definition().id());
+                case "reconnect" -> manager().reconnect(session.definition().id());
+                case "server" -> switchBotServer(session.definition().id(), action.server());
+                default -> logger.warn("Ignoring unknown scheduled action {}", action.action());
+            }
+        }
+    }
+
+    private void registerOptionalIntegrations(BotManager candidate, BotPluginConfig candidateConfig) {
+        if (!candidateConfig.runtime().webhookUrl().isBlank()) {
+            try {
+                candidate.addEventListener(new WebhookNotifier(candidateConfig.runtime().webhookUrl(), logger));
+            }
+            catch (IllegalArgumentException exception) {
+                logger.warn("Ignoring invalid runtime.webhook-url", exception);
+            }
+        }
+    }
+
+    private void startPresenceRules(BotPluginConfig candidate) {
+        for (BotPluginConfig.PresenceRule rule : candidate.runtime().presenceRules()) {
+            ScheduledTask task = proxy.getScheduler().buildTask(this, () -> applyPresenceRule(rule))
+                .repeat(Duration.ofMillis(rule.intervalMillis())).schedule();
+            presenceTasks.put(rule.id().toLowerCase(java.util.Locale.ROOT), task);
+            applyPresenceRule(rule);
+        }
+    }
+
+    private void applyPresenceRule(BotPluginConfig.PresenceRule rule) {
+        Optional<RegisteredServer> backend = findServer(rule.server());
+        if (backend.isEmpty()) {
+            logger.warn("Presence rule {} refers to unknown server {}", rule.id(), rule.server());
+            return;
+        }
+        java.util.Set<String> botNames = manager().snapshots().stream()
+            .map(snapshot -> snapshot.username().toLowerCase(java.util.Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
+        long humans = backend.get().getPlayersConnected().stream()
+            .filter(player -> !botNames.contains(player.getUsername().toLowerCase(java.util.Locale.ROOT))).count();
+        int desired = humans <= rule.maximumHumans() ? rule.minimumBots() : 0;
+        List<BotSession> candidates = selectBots(rule.selector());
+        for (int index = 0; index < candidates.size(); index++) {
+            BotSession session = candidates.get(index);
+            if (index < desired) {
+                manager().start(session.definition().id());
+                switchBotServer(session.definition().id(), backend.get().getServerInfo().getName());
+            }
+            else {
+                manager().stop(session.definition().id());
+            }
+        }
     }
 
     private Optional<RegisteredServer> findServer(String name) {

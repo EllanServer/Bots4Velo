@@ -34,6 +34,25 @@ runtime:
     jitter: 0.15
     # Zero means retry forever.
     maximum-attempts: 0
+  # Repeat a start, stop, reconnect or server switch without a console task.
+  schedules: []
+  # Optional JSON webhook receiving lifecycle events. Empty disables it.
+  webhook-url: ""
+  # Keep bots on an otherwise empty backend, then stop them when people join.
+  presence-rules: []
+  # Example:
+  # - id: keep-lobby-warm
+  #   server: lobby
+  #   selector: "@group:lobby"
+  #   minimum-bots: 1
+  #   maximum-humans: 0
+  #   interval-ms: 30000
+  # Example:
+  # - id: nightly-farm-reconnect
+  #   action: reconnect
+  #   selector: "@group:farm"
+  #   initial-delay-ms: 0
+  #   interval-ms: 3600000
 
 # Templates are merged in order; bot fields always override template fields.
 # Put passwords in plugins/bots4velo/secrets.yml or a password-env variable
@@ -57,6 +76,9 @@ templates:
         - "(?i)(please register|/register|请注册)"
       success-messages:
         - "(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|^authenticated$|登录成功|注册成功|认证成功)"
+      # Stop rather than retry forever when an account needs human action.
+      failure-messages:
+        - "(?i)(incorrect password|wrong password|invalid password|captcha|2fa|two-factor|verification code|banned|blacklisted)"
 
 bots:
   IronFarm01:

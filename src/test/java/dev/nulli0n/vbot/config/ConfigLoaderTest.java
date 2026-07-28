@@ -211,6 +211,43 @@ class ConfigLoaderTest {
             .hasMessageContaining("only one of password");
     }
 
+    @Test
+    void parsesRecurringOperationalSchedules() {
+        BotPluginConfig config = parse("""
+            runtime:
+              schedules:
+                - id: restart-farm
+                  action: reconnect
+                  selector: "@group:farm"
+                  initial-delay-ms: 500
+                  interval-ms: 60000
+                - id: lobby-rotation
+                  action: server
+                  selector: "@tag:lobby"
+                  server: survival
+                  interval-ms: 120000
+              presence-rules:
+                - id: keep-lobby-warm
+                  server: lobby
+                  selector: "@group:lobby"
+                  minimum-bots: 1
+                  maximum-humans: 0
+                  interval-ms: 30000
+            bots:
+              Farm:
+                username: AFK_Farm
+                password: secret
+            """);
+
+        assertThat(config.runtime().schedules()).hasSize(2);
+        assertThat(config.runtime().schedules().getFirst().selector()).isEqualTo("@group:farm");
+        assertThat(config.runtime().schedules().get(1).server()).isEqualTo("survival");
+        assertThat(config.runtime().presenceRules()).singleElement().satisfies(rule -> {
+            assertThat(rule.server()).isEqualTo("lobby");
+            assertThat(rule.minimumBots()).isOne();
+        });
+    }
+
     private static BotPluginConfig parse(String yaml) {
         return ConfigLoader.parse(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
     }

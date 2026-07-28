@@ -20,6 +20,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 public final class BotManager implements AutoCloseable {
     private final BotPluginConfig config;
@@ -31,6 +33,7 @@ public final class BotManager implements AutoCloseable {
     private final Map<String, BotSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> pendingActivations = new ConcurrentHashMap<>();
     private final Object activationLock = new Object();
+    private final List<Consumer<BotEvent>> eventListeners = new CopyOnWriteArrayList<>();
     private long nextActivationNanos;
 
     public BotManager(BotPluginConfig config, Logger logger) {
@@ -115,6 +118,14 @@ public final class BotManager implements AutoCloseable {
             .distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList();
     }
 
+    public void addEventListener(Consumer<BotEvent> listener) {
+        eventListeners.add(listener);
+    }
+
+    public void removeEventListener(Consumer<BotEvent> listener) {
+        eventListeners.remove(listener);
+    }
+
     public boolean start(String id) {
         return find(id).map(session -> {
             scheduleActivation(session, 0, session::start);
@@ -197,7 +208,18 @@ public final class BotManager implements AutoCloseable {
     private BotSession createSession(BotDefinition definition) {
         ProtocolResolver resolver = new ProtocolResolver(config.proxy(), definition, protocolDetectionService);
         return new BotSession(definition, config.proxy(), config.runtime(), resolver,
-            transportRegistry, connectionRateLimiter, executor, logger);
+            transportRegistry, connectionRateLimiter, executor, logger, this::publishEvent);
+    }
+
+    private void publishEvent(BotEvent event) {
+        for (Consumer<BotEvent> listener : eventListeners) {
+            try {
+                listener.accept(event);
+            }
+            catch (RuntimeException exception) {
+                logger.warn("Bot event listener failed", exception);
+            }
+        }
     }
 
     private void scheduleActivation(BotSession session, long minimumDelayMillis, Runnable action) {
