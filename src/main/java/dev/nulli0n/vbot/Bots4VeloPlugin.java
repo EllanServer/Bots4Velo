@@ -29,14 +29,12 @@ import dev.nulli0n.vbot.observe.PrometheusExporter;
 import dev.nulli0n.vbot.observe.WebhookNotifier;
 import dev.nulli0n.vbot.tab.TabIntegration;
 import dev.nulli0n.vbot.protocol.VelocityBackendProtocolDetector;
+import dev.nulli0n.vbot.schedule.DailySchedule;
 import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.time.LocalTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -423,6 +421,10 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
 
     private void startConfiguredSchedules(BotPluginConfig candidate) {
         for (BotPluginConfig.ScheduledAction action : candidate.runtime().schedules()) {
+            if (action.runsDailyAtConfiguredTime()) {
+                scheduleNextDailyAction(action);
+                continue;
+            }
             ScheduleTiming timing = scheduleTiming(action);
             ScheduledTask task = proxy.getScheduler().buildTask(this, () -> runScheduledAction(action))
                 .delay(timing.initialDelay())
@@ -432,17 +434,19 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     private ScheduleTiming scheduleTiming(BotPluginConfig.ScheduledAction action) {
-        if (!action.runsDailyAtConfiguredTime()) {
-            return new ScheduleTiming(Duration.ofMillis(action.initialDelayMillis()),
-                Duration.ofMillis(action.intervalMillis()));
-        }
-        ZoneId timezone = ZoneId.of(action.timezone());
-        ZonedDateTime now = ZonedDateTime.now(timezone);
-        ZonedDateTime next = now.with(LocalTime.parse(action.at(), DateTimeFormatter.ofPattern("HH:mm")));
-        if (!next.isAfter(now)) {
-            next = next.plusDays(1);
-        }
-        return new ScheduleTiming(Duration.between(now, next), Duration.ofDays(1));
+        return new ScheduleTiming(Duration.ofMillis(action.initialDelayMillis()),
+            Duration.ofMillis(action.intervalMillis()));
+    }
+
+    private void scheduleNextDailyAction(BotPluginConfig.ScheduledAction action) {
+        Duration delay = DailySchedule.delayUntilNext(action.at(), action.timezone(), Instant.now());
+        ScheduledTask task = proxy.getScheduler().buildTask(this, () -> {
+            runScheduledAction(action);
+            // Calculate the next local wall-clock occurrence after every run,
+            // so a daylight-saving transition does not shift the configured time.
+            scheduleNextDailyAction(action);
+        }).delay(delay).schedule();
+        scheduledActions.put(action.id().toLowerCase(java.util.Locale.ROOT), task);
     }
 
     private void runScheduledAction(BotPluginConfig.ScheduledAction action) {
