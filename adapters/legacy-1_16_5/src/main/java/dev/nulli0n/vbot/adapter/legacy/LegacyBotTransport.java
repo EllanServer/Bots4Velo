@@ -7,6 +7,7 @@ import com.github.steveice10.mc.protocol.data.game.ClientRequest;
 import com.github.steveice10.mc.protocol.data.game.MessageType;
 import com.github.steveice10.mc.protocol.data.game.ResourcePackStatus;
 import com.github.steveice10.mc.protocol.data.game.entity.player.HandPreference;
+import com.github.steveice10.mc.protocol.data.game.entity.player.Hand;
 import com.github.steveice10.mc.protocol.data.game.entity.player.PositionElement;
 import com.github.steveice10.mc.protocol.data.game.setting.ChatVisibility;
 import com.github.steveice10.mc.protocol.data.game.setting.SkinPart;
@@ -15,6 +16,7 @@ import com.github.steveice10.mc.protocol.packet.ingame.client.ClientRequestPacke
 import com.github.steveice10.mc.protocol.packet.ingame.client.ClientResourcePackStatusPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.ClientSettingsPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerPositionRotationPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerSwingArmPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.world.ClientTeleportConfirmPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerChatPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerJoinGamePacket;
@@ -129,6 +131,29 @@ final class LegacyBotTransport implements BotTransport {
             }
             yaw = newYaw;
             pitch = newPitch;
+            active.send(new ClientPlayerPositionRotationPacket(false, x, y, z, yaw, pitch));
+            return true;
+        }
+    }
+
+    @Override
+    public boolean swingMainHand() {
+        Session active = playableSession();
+        if (active == null) {
+            return false;
+        }
+        active.send(new ClientPlayerSwingArmPacket(Hand.MAIN_HAND));
+        return true;
+    }
+
+    @Override
+    public boolean jump() {
+        synchronized (movementLock) {
+            Session active = playableSession();
+            if (active == null || !positionKnown.get()) {
+                return false;
+            }
+            y += 0.42D;
             active.send(new ClientPlayerPositionRotationPacket(false, x, y, z, yaw, pitch));
             return true;
         }

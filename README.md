@@ -56,7 +56,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 .\gradlew.bat clean check shadowJar
 ```
 
-产物位于 `build/libs/bots4velo-0.1.0-SNAPSHOT.jar`。
+默认产物位于 `build/libs/bots4velo-2.1.0.jar`；也可以通过
+`-PpluginVersion=<version>` 覆盖构建版本。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
 只需把这个 JAR 放入 Velocity 的 `plugins` 目录。首次启动会生成
 `plugins/bots4velo/config.yml`。
@@ -66,17 +67,19 @@ MCProtocolLib 及其传递依赖冲突的设计结果。
 
 ## GitHub 大版本发布
 
-推送大版本标签会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
-GitHub Release（附带 JAR 和自动生成的 Release Notes）。仅 `vX.0.0` 形式的标签会触发，
-例如 `v2.0.0`；`v1.1.0`、`v1.0.1`、普通提交和分支推送均不会触发此发布流程。
+每次功能版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
+GitHub Release（附带 JAR 和自动生成的 Release Notes）。`vX.Y.0` 形式的标签会触发，
+例如 `v2.1.0`；修订版本标签（例如 `v2.1.1`）不会触发发布。普通 commit 和 Pull Request
+由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.0.0` 生成
-`bots4velo-2.0.0.jar`。
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.1.0` 生成
+`bots4velo-2.1.0.jar`。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
+创建并推送对应标签。
 
 ## 首次联调
 
@@ -93,20 +96,82 @@ git push origin v2.0.0
 /vbot list
 /vbot status <id>
 /vbot monitor [id]
+/vbot doctor [id|selector]
 /vbot servers
-/vbot server <id> <server>
+/vbot server <id|selector> <server>
 /vbot movehere <id>
 /vbot position <id>
 /vbot move <id> <x> <y> <z>
 /vbot look <id> <yaw> <pitch>
 /vbot create <id> <username> <password|-> [target-server|-]
 /vbot remove <id>
-/vbot start <id>
-/vbot stop <id>
-/vbot reconnect <id>
-/vbot command <id> <command...>
+/vbot start <id|selector>
+/vbot stop <id|selector>
+/vbot reconnect <id|selector>
+/vbot command <id|selector> <command...>
+/vbot behavior <id|selector> <start|pause|status>
 /vbot reload
 ```
+
+### 分组、选择器与权限
+
+机器人可在配置中使用 `groups` 和 `tags`。命令的 `<id|selector>` 参数接受单个 ID、`all`、
+`@group:farm`、`@tag:backup`、简写 `@farm`（匹配组或标签）以及 `@server:lobby`。例如：
+
+```text
+/vbot start all
+/vbot stop @farm
+/vbot server @lobby survival
+/vbot reconnect @server:lobby
+```
+
+权限默认采用最小职责划分：`bots4velo.view` 用于查看、`bots4velo.control` 用于连接与移动控制、
+`bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
+`bots4velo.admin` 拥有全部权限。
+
+插件默认消息为英文。首次启动会生成 `plugins/bots4velo/messages.yml`；将其中的
+`language` 改为 `zh_CN` 即可启用内置中文翻译，也可以在该文件覆写已列出的消息文本。
+
+`/vbot doctor [id|selector]` 会先进行不替换线上机器人的配置验证，再报告后端数量、TAB/
+VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、资源包和 Auth UI 计数。`/vbot reload`
+会先完整解析并构造替代管理器，解析失败时保留当前运行中的机器人。
+
+### 模板、机密与基础挂机行为
+
+`templates` 可复用认证、`protocol-version`、组/标签、切服和 `behavior` 设置；机器人按顺序继承
+模板后，再由自身字段覆盖。密码必须在 `password`、`password-env`、`password-secret` 中三选一。
+`password-env` 从 Velocity 进程环境读取；`password-secret` 从
+`plugins/bots4velo/secrets.yml` 的 `passwords.<name>` 读取。首次生成配置会同时生成
+`secrets.yml.example`，复制为 `secrets.yml` 后填写密码，并确保该文件不进入版本库。
+
+```yaml
+templates:
+  farm-auth:
+    groups: [farm]
+    tags: [afk]
+    protocol-version: "26.2"
+    auth:
+      mode: AUTO
+
+bots:
+  Farm01:
+    template: farm-auth
+    username: AFK_Farm01
+    password-secret: farm01
+    behavior:
+      mode: FARM       # STATIC, FARM, PATROL, COMMAND, FOLLOW
+      enabled: true
+      interval-ms: 5000
+      movement-radius: 0.0
+      yaw-step: 20.0
+      jump: false
+      swing: false
+```
+
+基础行为会在认证完成后启动，并在切服、断线、重连及重新进入 PLAY 后安全恢复。`STATIC` 保持在线；
+`FARM` 定时转头并可在小半径内往返，可选 `jump` 和 `swing`；`PATROL` 往返移动；`COMMAND`
+循环发送 `behavior.commands`；`FOLLOW` 预留玩家目标，未设目标时保持空闲。跳跃和挥手已按协议
+适配；潜行会在后续通过 input capability 扩展，避免把新版输入包错误发送给 1.16.5。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
 主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用

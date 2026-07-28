@@ -18,6 +18,7 @@ import dev.nulli0n.vbot.command.VBotCommand;
 import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
 import dev.nulli0n.vbot.config.ManagedBotStore;
+import dev.nulli0n.vbot.message.PluginMessages;
 import dev.nulli0n.vbot.protocol.VelocityBackendProtocolDetector;
 import org.slf4j.Logger;
 
@@ -41,6 +42,7 @@ public final class Bots4VeloPlugin {
     private volatile BotPluginConfig config;
     private volatile BotManager manager;
     private volatile ManagedBotStore managedBotStore;
+    private volatile PluginMessages messages;
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -52,6 +54,7 @@ public final class Bots4VeloPlugin {
     @Subscribe
     public void onInitialize(ProxyInitializeEvent event) {
         try {
+            messages = PluginMessages.load(dataDirectory, logger);
             managedBotStore = ManagedBotStore.load(dataDirectory);
             config = ConfigLoader.load(dataDirectory, managedBotStore.definitions());
             manager = new BotManager(config, logger, new VelocityBackendProtocolDetector(proxy));
@@ -70,19 +73,37 @@ public final class Bots4VeloPlugin {
         commandManager.register(meta, new VBotCommand(this));
     }
 
-    public synchronized void reload() throws IOException {
+    /**
+     * Parses and constructs a replacement manager before touching the live
+     * manager. A malformed configuration therefore leaves live bots running.
+     */
+    public synchronized ReloadResult reload() throws IOException {
+        PluginMessages replacementMessages = PluginMessages.load(dataDirectory, logger);
         ManagedBotStore replacementStore = ManagedBotStore.load(dataDirectory);
         BotPluginConfig replacementConfig = ConfigLoader.load(dataDirectory, replacementStore.definitions());
         BotManager replacement = new BotManager(replacementConfig, logger,
             new VelocityBackendProtocolDetector(proxy));
-        BotManager previous = manager;
-        managedBotStore = replacementStore;
-        config = replacementConfig;
-        manager = replacement;
-        if (previous != null) {
-            previous.close();
+        try {
+            BotManager previous = manager;
+            managedBotStore = replacementStore;
+            messages = replacementMessages;
+            config = replacementConfig;
+            manager = replacement;
+            if (previous != null) {
+                previous.close();
+            }
+            replacement.startEnabled();
+            return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
-        replacement.startEnabled();
+        catch (RuntimeException exception) {
+            replacement.close();
+            throw exception;
+        }
+    }
+
+    public BotPluginConfig validateConfiguration() throws IOException {
+        ManagedBotStore store = ManagedBotStore.load(dataDirectory);
+        return ConfigLoader.load(dataDirectory, store.definitions());
     }
 
     public synchronized ManagedCreateResult createManagedBot(String id, String username, String password,
@@ -140,6 +161,14 @@ public final class Bots4VeloPlugin {
         return logger;
     }
 
+    public PluginMessages messages() {
+        PluginMessages active = messages;
+        if (active == null) {
+            throw new IllegalStateException("Messages are not initialized");
+        }
+        return active;
+    }
+
     public ProxyServer proxy() {
         return proxy;
     }
@@ -149,6 +178,20 @@ public final class Bots4VeloPlugin {
             .map(server -> server.getServerInfo().getName())
             .sorted(String.CASE_INSENSITIVE_ORDER)
             .toList();
+    }
+
+    public List<BotSession> selectBots(String selector) {
+        List<BotSession> candidates = manager().select(selector);
+        String normalized = selector == null ? "" : selector.trim();
+        if (!normalized.regionMatches(true, 0, "@server:", 0, "@server:".length())) {
+            return candidates;
+        }
+        String server = normalized.substring("@server:".length()).trim();
+        if (server.isBlank()) {
+            return List.of();
+        }
+        return candidates.stream().filter(session -> currentServer(session.definition().id())
+            .map(current -> current.equalsIgnoreCase(server)).orElse(false)).toList();
     }
 
     public Optional<String> currentServer(String botId) {
@@ -267,6 +310,9 @@ public final class Bots4VeloPlugin {
         CREATED,
         ALREADY_EXISTS,
         LIMIT_REACHED
+    }
+
+    public record ReloadResult(int configuredBots, int managedBots) {
     }
 
     public enum ManagedRemoveResult {

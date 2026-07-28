@@ -1,18 +1,18 @@
-name: Build
+name: Build and test
 
 on:
   push:
     branches:
       - "**"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -24,13 +24,8 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Verify and package
-        run: ./gradlew clean check shadowJar --no-daemon
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
 
-      - name: Upload packaged plugin
-        uses: actions/upload-artifact@v4
-        with:
-          name: bots4velo-${{ github.sha }}
-          path: build/libs/*.jar
-          if-no-files-found: error
-          retention-days: 7
+      - name: Test and build shaded plugin
+        run: ./gradlew clean check shadowJar

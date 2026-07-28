@@ -21,6 +21,16 @@ public interface BotTransport extends AutoCloseable {
 
     boolean look(float yaw, float pitch);
 
+    /** Sends a main-hand swing when the active protocol supports it. */
+    default boolean swingMainHand() {
+        return false;
+    }
+
+    /** Performs one conservative client-side jump movement when possible. */
+    default boolean jump() {
+        return false;
+    }
+
     BotPosition position();
 
     @Override

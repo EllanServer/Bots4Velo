@@ -2,6 +2,7 @@ package dev.nulli0n.vbot.protocol;
 
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.BotDefinition;
+import dev.nulli0n.vbot.protocol.ProtocolSelection;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -18,9 +19,11 @@ public final class ProtocolResolver {
         this.endpoint = endpoint;
         this.definition = definition;
         this.detector = detector;
-        if (!endpoint.protocol().automatic()) {
-            cached.set(endpoint.protocol().fixedVersion());
-            source = "manual-config";
+        ProtocolSelection configured = definition.protocolOverride() == null
+            ? endpoint.protocol() : definition.protocolOverride();
+        if (!configured.automatic()) {
+            cached.set(configured.fixedVersion());
+            source = definition.protocolOverride() == null ? "manual-config" : "manual-bot-config";
         }
     }
 
@@ -45,7 +48,9 @@ public final class ProtocolResolver {
     }
 
     public void invalidateAutomaticDetection() {
-        if (endpoint.protocol().automatic()) {
+        ProtocolSelection configured = definition.protocolOverride() == null
+            ? endpoint.protocol() : definition.protocolOverride();
+        if (configured.automatic()) {
             cached.set(null);
             source = "unresolved";
         }

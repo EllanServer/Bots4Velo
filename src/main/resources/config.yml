@@ -35,19 +35,16 @@ runtime:
     # Zero means retry forever.
     maximum-attempts: 0
 
-bots:
-  IronFarm01:
-    enabled: false
-    username: "AFK_Iron01"
-    password: "change-this-password"
-    target-server: "survival"
-    # AUTO detection pings this registered Velocity backend directly. Empty uses
-    # target-server; if both are empty it falls back to the proxy Status response.
-    protocol-detection-server: ""
+# Templates are merged in order; bot fields always override template fields.
+# Put passwords in plugins/bots4velo/secrets.yml or a password-env variable
+# instead of committing them here.
+templates:
+  authme-farm:
+    groups: [farm]
+    tags: [afk, authme]
+    protocol-version: "AUTO"
     render-distance: 2
     auth:
-      # NONE, LOGIN, REGISTER or AUTO. AUTO reacts to configured prompt text,
-      # then falls back to login followed by register for first-time accounts.
       mode: "AUTO"
       login-command: "login {password}"
       register-command: "register {password} {password}"
@@ -59,8 +56,19 @@ bots:
       register-prompts:
         - "(?i)(please register|/register|请注册)"
       success-messages:
-        # Includes AuthMe/AuthMeReloaded's common English chat responses.
         - "(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|^authenticated$|登录成功|注册成功|认证成功)"
+
+bots:
+  IronFarm01:
+    template: authme-farm
+    enabled: false
+    username: "AFK_Iron01"
+    # Choose exactly one: password, password-env or password-secret.
+    password-secret: "iron-farm-01"
+    target-server: "survival"
+    # AUTO detection pings this registered Velocity backend directly. Empty uses
+    # target-server; if both are empty it falls back to the proxy Status response.
+    protocol-detection-server: ""
     server-switch-command: "server {server}"
     # Retry interval and post-confirmation settle time before after-login commands.
     # A retry is sent until a second PLAY transition proves the backend switch.
@@ -69,3 +77,13 @@ bots:
     server-switch-maximum-attempts: 0
     after-login-commands:
       - "res tp ironfarm"
+    behavior:
+      # STATIC, FARM, PATROL, COMMAND or FOLLOW. FOLLOW needs a player target
+      # supplied at runtime; it remains idle until one is configured.
+      mode: "FARM"
+      enabled: false
+      interval-ms: 5000
+      movement-radius: 0.0
+      yaw-step: 20.0
+      jump: false
+      swing: false

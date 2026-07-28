@@ -24,6 +24,7 @@ import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.ClientCommand;
 import org.geysermc.mcprotocollib.protocol.data.game.ResourcePackStatus;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.HandPreference;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.ChatVisibility;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.ParticleStatus;
@@ -48,6 +49,7 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.Serverbound
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundClientCommandPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundAcceptTeleportationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundSwingPacket;
 import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundLoginFinishedPacket;
 
 import java.util.ArrayList;
@@ -177,6 +179,29 @@ final class ModernBotTransport implements BotTransport {
             }
             yaw = newYaw;
             pitch = newPitch;
+            active.send(new ServerboundMovePlayerPosRotPacket(false, false, x, y, z, yaw, pitch));
+            return true;
+        }
+    }
+
+    @Override
+    public boolean swingMainHand() {
+        ClientSession active = playableSession();
+        if (active == null) {
+            return false;
+        }
+        active.send(new ServerboundSwingPacket(Hand.MAIN_HAND));
+        return true;
+    }
+
+    @Override
+    public boolean jump() {
+        synchronized (movementLock) {
+            ClientSession active = playableSession();
+            if (active == null || !positionKnown.get()) {
+                return false;
+            }
+            y += 0.42D;
             active.send(new ServerboundMovePlayerPosRotPacket(false, false, x, y, z, yaw, pitch));
             return true;
         }

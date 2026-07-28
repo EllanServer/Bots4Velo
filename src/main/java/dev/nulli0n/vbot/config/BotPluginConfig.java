@@ -58,11 +58,80 @@ public record BotPluginConfig(
         String serverSwitchCommand,
         long serverSwitchDelayMillis,
         int serverSwitchMaximumAttempts,
-        List<String> afterLoginCommands
+        List<String> afterLoginCommands,
+        List<String> groups,
+        List<String> tags,
+        ProtocolSelection protocolOverride,
+        String templateName,
+        BehaviorConfig behavior
     ) {
         public BotDefinition {
             afterLoginCommands = List.copyOf(afterLoginCommands);
+            groups = List.copyOf(groups);
+            tags = List.copyOf(tags);
+            templateName = templateName == null ? "" : templateName;
+            behavior = behavior == null ? BehaviorConfig.disabled() : behavior;
         }
+
+        /**
+         * Source-compatible constructor for integrations compiled against the
+         * 2.0 configuration model.
+         */
+        public BotDefinition(
+            String id,
+            boolean enabled,
+            String username,
+            String password,
+            String targetServer,
+            String protocolDetectionServer,
+            int renderDistance,
+            AuthConfig auth,
+            String serverSwitchCommand,
+            long serverSwitchDelayMillis,
+            int serverSwitchMaximumAttempts,
+            List<String> afterLoginCommands
+        ) {
+            this(id, enabled, username, password, targetServer, protocolDetectionServer, renderDistance, auth,
+                serverSwitchCommand, serverSwitchDelayMillis, serverSwitchMaximumAttempts, afterLoginCommands,
+                List.of(), List.of(), null, "", BehaviorConfig.disabled());
+        }
+    }
+
+    public record BehaviorConfig(
+        BehaviorMode mode,
+        boolean enabled,
+        long intervalMillis,
+        double movementRadius,
+        float yawStep,
+        boolean jump,
+        boolean swing,
+        List<String> commands,
+        List<BehaviorPoint> path,
+        List<String> serverCycle,
+        int serverCycleEvery
+    ) {
+        public BehaviorConfig {
+            mode = mode == null ? BehaviorMode.STATIC : mode;
+            commands = List.copyOf(commands);
+            path = List.copyOf(path);
+            serverCycle = List.copyOf(serverCycle);
+        }
+
+        public static BehaviorConfig disabled() {
+            return new BehaviorConfig(BehaviorMode.STATIC, false, 5_000L, 0.0D, 15.0F, false, false,
+                List.of(), List.of(), List.of(), 0);
+        }
+    }
+
+    public record BehaviorPoint(double x, double y, double z) {
+    }
+
+    public enum BehaviorMode {
+        STATIC,
+        FARM,
+        PATROL,
+        COMMAND,
+        FOLLOW
     }
 
     public record AuthConfig(

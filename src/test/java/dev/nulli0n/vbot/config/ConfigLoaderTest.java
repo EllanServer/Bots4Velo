@@ -1,9 +1,14 @@
 package dev.nulli0n.vbot.config;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,6 +123,77 @@ class ConfigLoaderTest {
             """))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("ignoring case");
+    }
+
+    @Test
+    void inheritsTemplatesAndLoadsPasswordFromSecretsFile(@TempDir Path directory) throws IOException {
+        Files.writeString(directory.resolve("config.yml"), """
+            templates:
+              farm-auth:
+                groups: [farm]
+                tags: [backup, afk]
+                protocol-version: 26.2
+                auth:
+                  mode: LOGIN
+                  login-command: login {password}
+            bots:
+              Farm01:
+                template: farm-auth
+                username: AFK_Farm01
+                password-secret: farm01
+            """);
+        Files.writeString(directory.resolve("secrets.yml"), """
+            passwords:
+              farm01: secret-from-file
+            """);
+
+        BotPluginConfig config = ConfigLoader.load(directory, Map.of());
+        BotPluginConfig.BotDefinition bot = config.bots().get("farm01");
+
+        assertThat(bot.password()).isEqualTo("secret-from-file");
+        assertThat(bot.groups()).containsExactly("farm");
+        assertThat(bot.tags()).containsExactly("backup", "afk");
+        assertThat(bot.protocolOverride().fixedVersion().protocolId()).isEqualTo(776);
+        assertThat(bot.templateName()).isEqualTo("farm-auth");
+    }
+
+    @Test
+    void parsesBehaviorConfigurationFromTemplate() {
+        BotPluginConfig config = parse("""
+            templates:
+              active-farm:
+                behavior:
+                  enabled: true
+                  mode: FARM
+                  interval-ms: 1000
+                  movement-radius: 2.5
+                  yaw-step: 30
+            bots:
+              Farm01:
+                template: active-farm
+                username: AFK_Farm01
+                password: secret
+            """);
+
+        BotPluginConfig.BehaviorConfig behavior = config.bots().get("farm01").behavior();
+        assertThat(behavior.enabled()).isTrue();
+        assertThat(behavior.mode()).isEqualTo(BotPluginConfig.BehaviorMode.FARM);
+        assertThat(behavior.intervalMillis()).isEqualTo(1_000L);
+        assertThat(behavior.movementRadius()).isEqualTo(2.5D);
+        assertThat(behavior.yawStep()).isEqualTo(30.0F);
+    }
+
+    @Test
+    void rejectsAmbiguousPasswordSources() {
+        assertThatThrownBy(() -> parse("""
+            bots:
+              ambiguous:
+                username: AFK_Ambiguous
+                password: secret
+                password-env: BOTS4VELO_PASSWORD
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("only one of password");
     }
 
     private static BotPluginConfig parse(String yaml) {

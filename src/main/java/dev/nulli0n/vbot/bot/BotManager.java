@@ -71,6 +71,50 @@ public final class BotManager implements AutoCloseable {
         return sortedSessions().stream().map(BotSession::snapshot).toList();
     }
 
+    /**
+     * Resolves a stable, local bot selector. Server selectors are completed by
+     * the Velocity-facing plugin because only it can observe current backend
+     * connections. Supported local selectors are an id, {@code all},
+     * {@code @group:<name>}, {@code @tag:<name>} and the compact
+     * {@code @<name>} form (group or tag).
+     */
+    public List<BotSession> select(String selector) {
+        String normalized = selector == null ? "" : selector.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+        if (normalized.equals("all") || normalized.equals("@all") || normalized.equals("*")) {
+            return sortedSessions();
+        }
+        if (!normalized.startsWith("@")) {
+            return find(normalized).map(List::of).orElseGet(List::of);
+        }
+        String expression = normalized.substring(1);
+        if (expression.startsWith("group:")) {
+            return byLabel(expression.substring("group:".length()), true);
+        }
+        if (expression.startsWith("tag:")) {
+            return byLabel(expression.substring("tag:".length()), false);
+        }
+        if (expression.startsWith("server:")) {
+            return sortedSessions();
+        }
+        return sortedSessions().stream()
+            .filter(session -> session.definition().groups().contains(expression)
+                || session.definition().tags().contains(expression))
+            .toList();
+    }
+
+    public List<String> groups() {
+        return sortedSessions().stream().flatMap(session -> session.definition().groups().stream())
+            .distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+    }
+
+    public List<String> tags() {
+        return sortedSessions().stream().flatMap(session -> session.definition().tags().stream())
+            .distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+    }
+
     public boolean start(String id) {
         return find(id).map(session -> {
             scheduleActivation(session, 0, session::start);
@@ -139,6 +183,15 @@ public final class BotManager implements AutoCloseable {
         List<BotSession> result = new ArrayList<>(sessions.values());
         result.sort(Comparator.comparing(session -> session.definition().id(), String.CASE_INSENSITIVE_ORDER));
         return result;
+    }
+
+    private List<BotSession> byLabel(String label, boolean group) {
+        if (label.isBlank()) {
+            return List.of();
+        }
+        return sortedSessions().stream()
+            .filter(session -> (group ? session.definition().groups() : session.definition().tags()).contains(label))
+            .toList();
     }
 
     private BotSession createSession(BotDefinition definition) {

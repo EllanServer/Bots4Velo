@@ -1,9 +1,11 @@
-name: Build major release
+name: Build feature release
 
 on:
   push:
     tags:
-      - "v[0-9]+.0.0"
+      # A planned feature release is vX.Y.0 (for example v2.1.0).
+      # Patch tags remain build-only and never create a GitHub Release.
+      - "v[0-9]+.[0-9]+.0"
 
 permissions:
   contents: write

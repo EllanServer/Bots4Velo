@@ -41,6 +41,7 @@ public final class BotSession {
     private final ScheduledExecutorService executor;
     private final Logger logger;
     private final ReconnectPolicy reconnectPolicy;
+    private final BotBehaviorRunner behavior;
     private final AtomicReference<BotState> state = new AtomicReference<>(BotState.STOPPED);
     private final AtomicBoolean manualStop = new AtomicBoolean(true);
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
@@ -88,6 +89,7 @@ public final class BotSession {
         this.executor = executor;
         this.logger = logger;
         this.reconnectPolicy = new ReconnectPolicy(runtime.reconnect());
+        this.behavior = new BotBehaviorRunner(this, definition.behavior(), executor, logger);
         this.loginPrompts = compile(definition.auth().loginPrompts());
         this.registerPrompts = compile(definition.auth().registerPrompts());
         this.successMessages = compile(definition.auth().successMessages());
@@ -101,7 +103,8 @@ public final class BotSession {
         return new BotSnapshot(definition.id(), definition.username(), activeProtocol, activeProtocolSource, state.get(),
             reconnectAttempts.get(), connectedAt, playEntries.get(), disconnects.get(),
             resourcePacksLoaded.get(), lastPlayAt, lastDisconnectAt, position(), lastAuthenticationUi.get(),
-            authenticationUiPresentations.get(), authenticationUiSubmissions.get(), lastDisconnectReason);
+            authenticationUiPresentations.get(), authenticationUiSubmissions.get(), lastDisconnectReason,
+            behavior.snapshot());
     }
 
     public void start() {
@@ -114,6 +117,7 @@ public final class BotSession {
         generation.incrementAndGet();
         cancelReconnect();
         cancelServerSwitch();
+        behavior.onUnavailable();
         BotTransport active = transport;
         transport = null;
         connectedAt = null;
@@ -128,6 +132,7 @@ public final class BotSession {
         manualStop.set(false);
         cancelReconnect();
         cancelServerSwitch();
+        behavior.onUnavailable();
         generation.incrementAndGet();
         BotTransport active = transport;
         transport = null;
@@ -156,6 +161,16 @@ public final class BotSession {
         return active != null && state.get() == BotState.PLAY && active.look(yaw, pitch);
     }
 
+    public boolean swingMainHand() {
+        BotTransport active = transport;
+        return active != null && state.get() == BotState.PLAY && active.swingMainHand();
+    }
+
+    public boolean jump() {
+        BotTransport active = transport;
+        return active != null && state.get() == BotState.PLAY && active.jump();
+    }
+
     public BotPosition position() {
         BotTransport active = transport;
         return active == null ? BotPosition.unknown() : active.position();
@@ -168,6 +183,27 @@ public final class BotSession {
 
     public boolean isAuthenticationComplete() {
         return authCompleted.get();
+    }
+
+    public void startBehavior() {
+        behavior.start();
+    }
+
+    public void pauseBehavior() {
+        behavior.pause();
+    }
+
+    public boolean requestBehaviorServerSwitch(String server) {
+        String normalized = server == null ? "" : server.trim();
+        if (normalized.isBlank() || definition.serverSwitchCommand().isBlank()) {
+            return false;
+        }
+        String command = definition.serverSwitchCommand().replace("{server}", normalized);
+        return sendCommand(command);
+    }
+
+    public BehaviorSnapshot behaviorSnapshot() {
+        return behavior.snapshot();
     }
 
     /**
@@ -247,6 +283,7 @@ public final class BotSession {
         switch (transportState) {
             case LOGIN -> {
                 state.set(BotState.LOGIN);
+                behavior.onUnavailable();
                 if (connectedAt == null) {
                     connectedAt = Instant.now();
                 }
@@ -254,6 +291,7 @@ public final class BotSession {
             }
             case CONFIGURATION -> {
                 state.set(BotState.CONFIGURATION);
+                behavior.onUnavailable();
                 if (serverSwitchPending.get()) {
                     serverSwitchTransitionSeen.set(true);
                 }
@@ -276,6 +314,9 @@ public final class BotSession {
                 }
                 else if (serverSwitchPending.get() && isConfirmedServerTransition()) {
                     completeServerSwitch(currentGeneration);
+                }
+                else if (authCompleted.get()) {
+                    behavior.onReady();
                 }
             }
         }
@@ -470,6 +511,7 @@ public final class BotSession {
             scheduleCommand(currentGeneration, CommandTemplate.render(command, definition), delay);
             delay += runtime.commandIntervalMillis();
         }
+        behavior.onReady();
     }
 
     private void scheduleCommand(long currentGeneration, String command, long delay) {
@@ -501,6 +543,7 @@ public final class BotSession {
         lastDisconnectAt = Instant.now();
         protocolResolver.invalidateAutomaticDetection();
         cancelServerSwitch();
+        behavior.onUnavailable();
         lastDisconnectReason = reason;
         if (cause != null) {
             logger.warn("Bot {} disconnected: {}", definition.id(), reason, cause);

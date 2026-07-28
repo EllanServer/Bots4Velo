@@ -21,6 +21,7 @@ public record BotSnapshot(
     String authenticationUi,
     long authenticationUiPresentations,
     long authenticationUiSubmissions,
-    String lastDisconnectReason
+    String lastDisconnectReason,
+    BehaviorSnapshot behavior
 ) {
 }
