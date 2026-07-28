@@ -67,18 +67,18 @@ MCProtocolLib 及其传递依赖冲突的设计结果。
 
 ## GitHub 大版本发布
 
-每次功能版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
-GitHub Release（附带 JAR 和自动生成的 Release Notes）。`vX.Y.0` 形式的标签会触发，
-例如 `v2.4.0`；修订版本标签（例如 `v2.4.1`）不会触发发布。普通 commit 和 Pull Request
+每次大版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
+GitHub Release（附带 JAR 和自动生成的 Release Notes）。仅 `vX.0.0` 形式的标签会触发，
+例如 `v2.0.0`；次版本与修订版本标签（例如 `v2.1.0`、`v2.0.1`）不会触发发布。普通 commit 和 Pull Request
 由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
 ```powershell
-git tag v2.4.0
-git push origin v2.4.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.4.0` 生成
-`bots4velo-2.4.0.jar` 及同名 `.sha256` 校验文件。每一个功能版本都应先完成测试、更新文档与配置示例，再 commit、push、
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.0.0` 生成
+`bots4velo-2.0.0.jar` 及同名 `.sha256` 校验文件。每一个大版本都应先完成测试、更新文档与配置示例，再 commit、push、
 创建并推送对应标签。
 
 ## 集成验证
