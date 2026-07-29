@@ -22,12 +22,12 @@ class GithubWorkflowTest {
         String integration = Files.readString(Path.of("scripts/ci/run-network-integration.sh"));
         String readme = Files.readString(Path.of("README.md"));
 
-        assertThat(build).contains("orElse(\"2.7.0\")");
-        assertThat(verifier).contains("$ExpectedPluginVersion = \"2.7.0\"");
-        assertThat(integration).contains("bots4velo-integration/2.7.0");
+        assertThat(build).contains("orElse(\"2.8.0\")");
+        assertThat(verifier).contains("$ExpectedPluginVersion = \"2.8.0\"");
+        assertThat(integration).contains("bots4velo-integration/2.8.0");
         assertThat(readme)
-            .contains("bots4velo-2.7.0.jar")
-            .contains("bots4velo-paper-2.7.0.jar")
+            .contains("bots4velo-2.8.0.jar")
+            .contains("bots4velo-paper-2.8.0.jar")
             .contains("registration-second-argument: AUTO")
             .contains("`CONFIRMATION`")
             .contains("`EMAIL_OPTIONAL`")

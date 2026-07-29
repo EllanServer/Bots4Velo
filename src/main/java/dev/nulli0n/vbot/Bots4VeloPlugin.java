@@ -158,7 +158,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
      * manager. A malformed configuration therefore leaves live bots running.
      */
     public synchronized ReloadResult reload() throws IOException {
-        PluginMessages replacementMessages = PluginMessages.load(dataDirectory, logger);
+        PluginMessages replacementMessages = PluginMessages.loadStrict(dataDirectory, logger);
         ManagedBotStore replacementStore = ManagedBotStore.load(dataDirectory);
         BotPluginConfig replacementConfig = ConfigLoader.load(dataDirectory, replacementStore.definitions());
         BotManager replacement = null;
@@ -373,6 +373,14 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             throw new IllegalStateException("Messages are not initialized");
         }
         return active;
+    }
+
+    /** Persists and activates a UI language without restarting any bot session. */
+    public synchronized PluginMessages changeLanguage(String requestedLanguage) throws IOException {
+        PluginMessages replacement = PluginMessages.selectLanguage(dataDirectory, requestedLanguage, logger);
+        messages = replacement;
+        logger.info("Bots4Velo command language changed to {}", replacement.language());
+        return replacement;
     }
 
     public ProxyServer proxy() {

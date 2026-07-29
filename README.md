@@ -40,6 +40,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 - `runtime.maximum-bots` 是静态机器人和运行时机器人合计的硬上限。
 - `/vbot status` 提供当前协议/状态以及本进程内累计 PLAY、非人工断线、资源包成功次数和时间戳，
   用于稳定性观察与故障审计。
+- 默认英文、内置简体中文及自定义语言目录；可用 `/vbot language` 安全热切换，不会重启机器人。
+- 四页权限感知帮助界面，命令可点击填入、翻页可点击执行，并提供悬停说明和权限节点。
 - 协议级绝对位置和视角控制，并可输出单个或全部机器人的 JSON 监控快照。
 - 通过带 HMAC 签名和防重放校验的 Paper 伴侣设置无敌、游戏模式、挂机属性与重生点，并支持
   手动重生和一键恢复生命/饥饿/着火状态。
@@ -61,8 +63,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 
 默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-- `bots4velo-2.7.0.jar`：安装到 Velocity 的 `plugins` 目录；
-- `bots4velo-paper-2.7.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+- `bots4velo-2.8.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-2.8.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
 
 也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
@@ -89,7 +91,7 @@ git push origin v2.0.0
 `bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
 测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
 
-`v2.7.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
+`v2.8.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
 同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
 
 ## 集成验证
@@ -132,7 +134,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 管理权限为 `bots4velo.admin`。命令包括：
 
 ```text
-/vbot help [1|2|3]
+/vbot help [1|2|3|4]
 /vbot list
 /vbot status <id>
 /vbot monitor [id]
@@ -160,6 +162,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot spawnpoint <id|selector> <current|worldspawn|clear>
 /vbot spawnpoint <id|selector> set <world> <x> <y> <z> [yaw]
 /vbot respawn <id|selector>
+/vbot language [locale]
 /vbot reload
 ```
 
@@ -269,8 +272,15 @@ bots:
 跨玩家目标均被拒绝。共享密钥或代理/Paper 文件系统失陷
 仍会破坏这一边界，因此应限制配置文件权限、隔离后端端口，且不要让普通客户端直接连接 Paper。
 
-插件默认消息为英文。首次启动会生成 `plugins/bots4velo/messages.yml`；将其中的
-`language` 改为 `zh_CN` 即可启用内置中文翻译，也可以在该文件覆写已列出的消息文本。
+插件默认消息为英文。首次启动会生成 `plugins/bots4velo/messages.yml`。具有 `bots4velo.view` 的用户可用
+`/vbot language` 查看当前语言和可用语言；具有 `bots4velo.reload` 的管理员可点击语言名称准备命令，或直接执行
+`/vbot language zh_CN`、`/vbot language en_US`。切换只原子更新消息文件和内存消息目录，不会重启或重连机器人。
+也可以手动修改顶层 `language` 后执行 `/vbot reload`。旧消息文件会自动从新版内置目录补齐缺少的键，同时保留
+自定义覆写；YAML 损坏、未知语言或翻译占位符不兼容时不会破坏当前运行状态。命令名称、选择器、状态枚举与 JSON
+字段保持英文，便于脚本、文档和跨语言管理员使用一致语法。
+
+`/vbot help` 分为概览、控制、管理与语言、Paper 玩家状态四页。帮助只显示执行者有权使用的命令；点击命令会把
+命令安全填入聊天栏，只有只读翻页和查看操作会直接执行。悬停可查看说明和所需权限。
 
 `/vbot doctor [id|selector]` 会先进行不替换线上机器人的配置验证，再报告后端数量、TAB/
 VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、资源包和 Auth UI 计数。`/vbot reload`
@@ -365,7 +375,7 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 ### AuthMe、AuthMeUI 与 Smart AuthMe Login UI
 
 这里的 **AuthMeUI** 特指 [`TejasLamba2006/AuthMeUI 1.3.4`](https://modrinth.com/plugin/authmeui/version/1.3.4)，
-不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.7 支持它的两种工作方式：
+不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.8.0 支持它的两种工作方式：
 
 - pre-join：在 CONFIGURATION 阶段依次处理服务器规则、注册或登录 Dialog，完成后才进入 PLAY；
 - post-join：进入 PLAY 后处理 AuthMeUI 的登录/注册 Dialog，再继续切服和登录后命令；

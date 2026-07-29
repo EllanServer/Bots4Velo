@@ -6,27 +6,47 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class VBotCommandTest {
     @Test
-    void helpIsSplitIntoShortReadableLines() {
+    void helpCatalogMatchesTheFourPublishedPages() {
         assertThat(VBotCommand.helpLines(1))
-            .allMatch(line -> line.length() <= 64)
-            .allMatch(VBotCommandTest::isAscii)
-            .anyMatch(line -> line.contains("server <id|selector> <server>"))
-            .anyMatch(line -> line.contains("movehere"));
+            .containsExactly(
+                "/vbot list - List bots, states, servers and labels",
+                "/vbot status <id> - Show detailed bot status",
+                "/vbot history <id> - Show recent bot events",
+                "/vbot doctor [selector] - Diagnose configuration and connectivity",
+                "/vbot monitor [id] - Output monitoring JSON",
+                "/vbot servers - List Velocity backends",
+                "/vbot server <selector> <server> - Switch bots to a backend",
+                "/vbot movehere <selector> - Bring bots to your server"
+            );
         assertThat(VBotCommand.helpLines(2))
-            .allMatch(line -> line.length() <= 64)
-            .allMatch(VBotCommandTest::isAscii)
-            .anyMatch(line -> line.contains("create"))
-            .anyMatch(line -> line.contains("selector"));
+            .containsExactly(
+                "/vbot start|stop|reconnect <selector> - Control connections",
+                "/vbot command <selector> <command> - Run a command as bots",
+                "/vbot behavior <selector> <action> - Start, pause or inspect behavior",
+                "/vbot behavior <selector> follow <player> - Follow or unfollow a player",
+                "/vbot position <id> - Show the protocol position",
+                "/vbot move <id> <x> <y> <z> - Move a bot",
+                "/vbot look <id> <yaw> <pitch> - Rotate a bot"
+            );
         assertThat(VBotCommand.helpLines(3))
-            .allMatch(line -> line.length() <= 64)
-            .allMatch(VBotCommandTest::isAscii)
-            .anyMatch(line -> line.contains("invulnerable"))
-            .anyMatch(line -> line.contains("gamemode"))
-            .anyMatch(line -> line.contains("spawnpoint"))
-            .anyMatch(line -> line.contains("respawn"))
-            .anyMatch(line -> line.contains("afk"))
-            .anyMatch(line -> line.contains("recover"));
-        assertThat(VBotCommand.helpLines(4)).isEmpty();
+            .containsExactly(
+                "/vbot create <id> <name> ... - Create a persistent bot",
+                "/vbot remove <id> - Remove a managed bot",
+                "/vbot reload - Validate and reload configuration",
+                "/vbot language - Show the current UI language",
+                "/vbot language <locale> - Switch the global UI language"
+            );
+        assertThat(VBotCommand.helpLines(4))
+            .containsExactly(
+                "/vbot afk <selector> status - Inspect the actual AFK policy",
+                "/vbot afk <selector> <preset|set|unmanage> - Apply or stop managing an AFK policy",
+                "/vbot recover <selector> - Heal, feed, extinguish and respawn",
+                "/vbot invulnerable <selector> <on|off|keep> - Manage backend invulnerability",
+                "/vbot gamemode <selector> <mode|unchanged> - Manage backend game mode",
+                "/vbot spawnpoint <selector> <mode> - Manage the respawn point",
+                "/vbot respawn <selector> - Request a backend respawn"
+            );
+        assertThat(VBotCommand.helpLines(5)).isEmpty();
     }
 
     @Test
@@ -54,9 +74,5 @@ class VBotCommandTest {
         assertThat(VBotCommand.afkActionSuggestions("p", true, true))
             .containsExactly("preset");
         assertThat(VBotCommand.afkActionSuggestions("", false, false)).isEmpty();
-    }
-
-    private static boolean isAscii(String value) {
-        return value.chars().allMatch(character -> character <= 0x7F);
     }
 }
