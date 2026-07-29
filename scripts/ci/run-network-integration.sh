@@ -205,7 +205,7 @@ runtime:
       selector: "IntegrationBot"
       minimum-bots: 1
       maximum-humans: 10
-      interval-ms: 750
+      interval-ms: 1000
 bots:
   IntegrationBot:
     enabled: true

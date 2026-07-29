@@ -48,9 +48,20 @@ class GithubWorkflowTest {
             .contains("-PciProtocol=\"${{ matrix.protocol }}\"")
             .contains("integration-network:")
             .contains("minecraft: \"1.16.5\"")
+            .contains("server-java: \"16\"")
             .contains("minecraft: \"1.21.11\"")
             .contains("minecraft: \"26.1.2\"")
             .contains("minecraft: \"26.2\"")
             .contains("scripts/ci/run-network-integration.sh");
+    }
+
+    @Test
+    void integrationScriptUsesAValidVelocityAndPresenceConfiguration() throws Exception {
+        String script = Files.readString(Path.of("scripts/ci/run-network-integration.sh"));
+
+        assertThat(script)
+            .contains("[forced-hosts]")
+            .contains("presence-rules:")
+            .contains("interval-ms: 1000");
     }
 }
