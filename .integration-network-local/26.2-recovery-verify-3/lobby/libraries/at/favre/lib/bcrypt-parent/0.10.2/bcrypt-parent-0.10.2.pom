@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>at.favre.lib</groupId>
+        <artifactId>common-parent</artifactId>
+        <version>18</version>
+    </parent>
+
+    <artifactId>bcrypt-parent</artifactId>
+    <packaging>pom</packaging>
+    <version>0.10.2</version>
+
+    <url>https://github.com/patrickfav/bcrypt</url>
+    <inceptionYear>2018</inceptionYear>
+
+    <name>bcrypt-parent</name>
+    <description>Parent Maven project for Bcrypt</description>
+
+    <!-- this is a workaround to be able to only deploy the main module used in deploy phase, nexus stage plugin is buggy -->
+    <profiles>
+        <profile>
+            <id>allmodules</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>modules/bcrypt</module>
+                <module>modules/bcrypt-cli</module>
+                <module>modules/benchmark-jmh</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>mainmodule</id>
+            <modules>
+                <module>modules/bcrypt</module>
+            </modules>
+        </profile>
+    </profiles>
+
+    <properties>
+        <project.jbcryptVersion>0.4</project.jbcryptVersion>
+        <project.bcVersion>1.70</project.bcVersion>
+        <!-- set this to true if fail because of missing credentials -->
+        <commonConfig.jarSign.skip>true</commonConfig.jarSign.skip>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <scm>
+        <connection>scm:git:https://github.com/patrickfav/bcrypt.git</connection>
+        <developerConnection>scm:git:https://github.com/patrickfav/bcrypt.git</developerConnection>
+        <url>https://github.com/patrickfav/bcrypt</url>
+    </scm>
+
+    <issueManagement>
+        <system>Github</system>
+        <url>https://github.com/patrickfav/bcrypt/issues</url>
+    </issueManagement>
+
+    <ciManagement>
+        <system>Github Actions</system>
+        <url>https://github.com/patrickfav/bcrypt/actions</url>
+    </ciManagement>
+</project>

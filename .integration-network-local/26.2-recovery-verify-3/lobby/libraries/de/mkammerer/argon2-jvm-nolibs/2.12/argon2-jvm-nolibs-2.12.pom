@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <!-- This module was also published with a richer model, Gradle metadata,  -->
+  <!-- which should be used instead. Do not delete the following line which  -->
+  <!-- is to indicate to Gradle or any Gradle module metadata file consumer  -->
+  <!-- that they should prefer consuming it instead. -->
+  <!-- do_not_remove: published-with-gradle-metadata -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>de.mkammerer</groupId>
+  <artifactId>argon2-jvm-nolibs</artifactId>
+  <version>2.12</version>
+  <name>Argon2 JVM</name>
+  <description>Argon2 Binding for the JVM</description>
+  <url>https://github.com/phxql/argon2-jvm</url>
+  <licenses>
+    <license>
+      <name>GNU Lesser General Public License, Version 3</name>
+      <url>https://www.gnu.org/licenses/lgpl-3.0.en.html</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>phxql</id>
+      <name>Moritz Halbritter</name>
+      <email>halbritter.moritz@gmail.com</email>
+      <url>https://www.mkammerer.de/</url>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git://github.com/phxql/argon2-jvm.git</connection>
+    <developerConnection>scm:git:git://github.com/phxql/argon2-jvm.git</developerConnection>
+    <url>https://github.com/phxql/argon2-jvm</url>
+  </scm>
+  <dependencies>
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>5.16.0</version>
+      <scope>runtime</scope>
+    </dependency>
+  </dependencies>
+</project>

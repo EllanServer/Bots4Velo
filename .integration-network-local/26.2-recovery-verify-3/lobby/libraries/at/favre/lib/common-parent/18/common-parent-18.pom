@@ -1,0 +1,847 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>at.favre.lib</groupId>
+    <artifactId>common-parent</artifactId>
+    <version>18</version>
+    <packaging>pom</packaging>
+
+    <name>Maven Common Configuration</name>
+    <description>Common configurations (plugins, version, etc.) used as parent for maven projects.</description>
+    <url>https://github.com/patrickfav/mvn-common-parent</url>
+    <inceptionYear>2019</inceptionYear>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <commonConfig.checkstylePlugin.version>3.2.1</commonConfig.checkstylePlugin.version>
+        <commonConfig.checkstyle.version>8.45.1</commonConfig.checkstyle.version>
+        <commonConfig.checkstyle.config.version>2</commonConfig.checkstyle.config.version>
+
+        <commonConfig.jarSign.keystore>${project.basedir}/keystore.jks</commonConfig.jarSign.keystore>
+        <commonConfig.jarSign.alias>pfopensource</commonConfig.jarSign.alias>
+        <!--suppress UnresolvedMavenProperty -->
+        <commonConfig.jarSign.storepass>${env.OPENSOURCE_PROJECTS_KS_PW}</commonConfig.jarSign.storepass>
+        <!--suppress UnresolvedMavenProperty -->
+        <commonConfig.jarSign.keypass>${env.OPENSOURCE_PROJECTS_KEY_PW}</commonConfig.jarSign.keypass>
+        <!-- set this to true if fail because of missing credentials -->
+        <commonConfig.jarSign.skip>false</commonConfig.jarSign.skip>
+
+        <commonConfig.enforcer.reqMavenVersion>[3.3.9,)</commonConfig.enforcer.reqMavenVersion>
+
+        <commonConfig.compile.plugin.version>3.10.1</commonConfig.compile.plugin.version>
+        <commonConfig.compile.errorprone.version>2.3.4</commonConfig.compile.errorprone.version>
+
+        <commonConfig.deps.jackson-core.version>2.14.2</commonConfig.deps.jackson-core.version>
+        <commonConfig.deps.jackson-jaxrs.version>${commonConfig.deps.jackson-core.version}
+        </commonConfig.deps.jackson-jaxrs.version>
+
+        <commonConfig.proguard.version>6.2.2</commonConfig.proguard.version>
+        <commonConfig.proguard.configFile>${project.basedir}/proguard-rules.pro</commonConfig.proguard.configFile>
+
+        <!-- disable minimum covarge rules -->
+        <commonConfig.jacoco.check.disable>false</commonConfig.jacoco.check.disable>
+        <!-- required minimum line coverage, otherwise build will halt -->
+        <commonConfig.jacoco.check.linecov>0.60</commonConfig.jacoco.check.linecov>
+        <!-- required minimum method coverage, otherwise build will halt -->
+        <commonConfig.jacoco.check.methodcov>0.70</commonConfig.jacoco.check.methodcov>
+        <!-- required minimum method class, otherwise build will halt -->
+        <commonConfig.jacoco.check.classcov>0.80</commonConfig.jacoco.check.classcov>
+        <commonConfig.jacoco.skip>false</commonConfig.jacoco.skip>
+    </properties>
+
+    <!-- see repositories in Super POM: https://maven.apache.org/guides/introduction/introduction-to-the-pom.html#Super_POM -->
+    <repositories>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo1.maven.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo1.maven.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <build>
+        <plugins>
+
+            <!-- Plugins defined to be activated by default -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>versions-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+
+            <!-- THIS CONFIG WILL NOT BE INHERITED: START -->
+            <!-- We must generate an empty source JAR file to publish on Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+                <inherited>false</inherited>
+                <configuration>
+                    <classesDirectory>misc</classesDirectory>
+                    <excludes>
+                        <exclude>**</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>default-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>javadoc-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>javadoc</classifier>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>sources-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>sources</classifier>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- THIS CONFIG WILL NOT BE INHERITED: END -->
+
+        </plugins>
+
+        <pluginManagement>
+            <plugins>
+                <!-- check for updates with 'mvnw versions:display-dependency-updates' or 'mvnw versions:display-plugin-updates' -->
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>versions-maven-plugin</artifactId>
+                    <version>2.14.2</version>
+                </plugin>
+
+                <!-- clean -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-clean-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+
+                <!-- deploy -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-deploy-plugin</artifactId>
+                    <version>3.1.0</version>
+                </plugin>
+
+                <!-- install -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-install-plugin</artifactId>
+                    <version>3.1.0</version>
+                </plugin>
+
+                <!-- javadoc -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.4.1</version>
+                    <executions>
+                        <execution>
+                            <id>attach-javadocs</id>
+                            <goals>
+                                <goal>jar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- owasp dependency checker -->
+                <plugin>
+                    <groupId>org.owasp</groupId>
+                    <artifactId>dependency-check-maven</artifactId>
+                    <version>8.0.2</version>
+                    <configuration>
+                        <failBuildOnAnyVulnerability>true</failBuildOnAnyVulnerability>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- surefire test plugin -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.0.0-M8</version>
+                </plugin>
+
+                <!-- checkstyle -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-checkstyle-plugin</artifactId>
+                    <version>${commonConfig.checkstylePlugin.version}</version>
+                    <!-- automatically run on check phase -->
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.puppycrawl.tools</groupId>
+                            <artifactId>checkstyle</artifactId>
+                            <version>${commonConfig.checkstyle.version}</version>
+                        </dependency>
+                        <!-- load checkstyle config from this dependency, see https://stackoverflow.com/a/19690484/774398 -->
+                        <dependency>
+                            <groupId>at.favre.lib</groupId>
+                            <artifactId>checkstyle-config</artifactId>
+                            <version>${commonConfig.checkstyle.config.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <configuration>
+                        <configLocation>checkstyle.xml</configLocation>
+                    </configuration>
+                </plugin>
+
+                <!-- error prone support -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${commonConfig.compile.plugin.version}</version>
+                </plugin>
+
+                <!-- java source plugin -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>3.2.1</version>
+                    <executions>
+                        <execution>
+                            <id>attach-sources</id>
+                            <goals>
+                                <goal>jar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- java code coverage plugin -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>0.8.8</version>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                            <configuration>
+                                <skip>${commonConfig.jacoco.skip}</skip>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>default-report</id>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                            <configuration>
+                                <skip>${commonConfig.jacoco.skip}</skip>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>default-check</id>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                            <configuration>
+                                <skip>${commonConfig.jacoco.check.disable}</skip>
+                                <rules>
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>LINE</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${commonConfig.jacoco.check.linecov}</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>METHOD</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${commonConfig.jacoco.check.methodcov}</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>CLASS</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${commonConfig.jacoco.check.classcov}</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- java coveralls plugin -->
+                <plugin>
+                    <groupId>org.eluder.coveralls</groupId>
+                    <artifactId>coveralls-maven-plugin</artifactId>
+                    <version>4.3.0</version>
+                </plugin>
+
+                <!-- jar signer -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jarsigner-plugin</artifactId>
+                    <version>3.0.0</version>
+                    <executions>
+                        <execution>
+                            <id>sign</id>
+                            <goals>
+                                <goal>sign</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <skip>${commonConfig.jarSign.skip}</skip>
+                        <keystore>${commonConfig.jarSign.keystore}</keystore>
+                        <alias>${commonConfig.jarSign.alias}</alias>
+                        <storepass>${commonConfig.jarSign.storepass}</storepass>
+                        <keypass>${commonConfig.jarSign.keypass}</keypass>
+                    </configuration>
+                </plugin>
+
+                <!-- binary checksum -->
+                <plugin>
+                    <groupId>net.nicoulaj.maven.plugins</groupId>
+                    <artifactId>checksum-maven-plugin</artifactId>
+                    <version>1.11</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>artifacts</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <algorithms>
+                            <algorithm>SHA-256</algorithm>
+                        </algorithms>
+                        <shasumSummary>true</shasumSummary>
+                        <shasumSummaryFile>checksum-sha256.txt</shasumSummaryFile>
+                        <attachChecksums>false</attachChecksums>
+                        <quiet>false</quiet>
+                    </configuration>
+                </plugin>
+
+                <!-- enforce maven version -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>3.2.1</version>
+                    <executions>
+                        <execution>
+                            <id>enforce-maven</id>
+                            <goals>
+                                <goal>enforce</goal>
+                            </goals>
+                            <configuration>
+                                <rules>
+                                    <requireMavenVersion>
+                                        <version>${commonConfig.enforcer.reqMavenVersion}</version>
+                                    </requireMavenVersion>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>com.github.wvengen</groupId>
+                    <artifactId>proguard-maven-plugin</artifactId>
+                    <version>2.6.0</version>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>proguard</goal>
+                            </goals>
+                            <configuration>
+                                <includeDependency>true</includeDependency>
+                                <attachArtifactClassifier>optimized</attachArtifactClassifier>
+                                <attach>true</attach>
+                                <proguardVersion>${commonConfig.proguard.version}</proguardVersion>
+                                <obfuscate>false</obfuscate>
+                                <options>
+                                    <option>-include ${commonConfig.proguard.configFile}</option>
+                                </options>
+                                <libs>
+                                    <lib>${java.home}/lib/rt.jar</lib>
+                                </libs>
+                            </configuration>
+                        </execution>
+                    </executions>
+                    <dependencies>
+                        <dependency>
+                            <groupId>net.sf.proguard</groupId>
+                            <artifactId>proguard-base</artifactId>
+                            <version>${commonConfig.proguard.version}</version>
+                            <scope>runtime</scope>
+                        </dependency>
+                    </dependencies>
+                </plugin>
+                <!-- Nexus Staging Plugin for deploying to maven central-->
+                <plugin>
+                    <groupId>org.sonatype.plugins</groupId>
+                    <artifactId>nexus-staging-maven-plugin</artifactId>
+                    <version>1.6.13</version>
+                    <extensions>true</extensions>
+                    <configuration>
+                        <serverId>ossrh</serverId>
+                        <nexusUrl>https://oss.sonatype.org/</nexusUrl>
+                    </configuration>
+                </plugin>
+                <!-- GPG plugin -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-gpg-plugin</artifactId>
+                    <version>3.0.1</version>
+                    <executions>
+                        <execution>
+                            <id>sign-artifacts</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>sign</goal>
+                            </goals>
+                            <configuration>
+                                <!-- Prevent `gpg` from using pinentry programs -->
+                                <gpgArguments>
+                                    <arg>--pinentry-mode</arg>
+                                    <arg>loopback</arg>
+                                </gpgArguments>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+    <reporting>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>${commonConfig.checkstylePlugin.version}</version>
+                <reportSets>
+                    <reportSet>
+                        <reports>
+                            <report>checkstyle</report>
+                        </reports>
+                    </reportSet>
+                </reportSets>
+            </plugin>
+        </plugins>
+    </reporting>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- common dependencies: junit 4 -->
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <version>4.13.2</version>
+                <scope>test</scope>
+            </dependency>
+            <!-- common dependencies: bytes -->
+            <dependency>
+                <groupId>at.favre.lib</groupId>
+                <artifactId>bytes</artifactId>
+                <version>1.5.0</version>
+            </dependency>
+            <!-- common dependencies: jackson-core -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${commonConfig.deps.jackson-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${commonConfig.deps.jackson-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${commonConfig.deps.jackson-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.jaxrs</groupId>
+                <artifactId>jackson-jaxrs-json-provider</artifactId>
+                <version>${commonConfig.deps.jackson-jaxrs.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- COMPILER PROFILES
+     Use this either with your cmd line or in .mvn/maven.config. Example "-DcommonConfig.compiler.profile=jdk11".
+     This sets the JDK and additionally configurations, eg. for errorprone for the compiler. -->
+    <profiles>
+        <profile>
+            <id>JDK_9_PLUS_AUTO_CONFIG</id>
+            <activation>
+                <jdk>[9,)</jdk>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- JDK 9+ does not have rt.jr, so lib must be one of the new modules, see https://stackoverflow.com/questions/53478628/does-proguard-support-java-11 -->
+                        <plugin>
+                            <groupId>com.github.wvengen</groupId>
+                            <artifactId>proguard-maven-plugin</artifactId>
+                            <executions>
+                                <execution>
+                                    <configuration>
+                                        <libs>
+                                            <lib>${java.home}/jmods</lib>
+                                        </libs>
+                                    </configuration>
+                                </execution>
+                            </executions>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_7_AND_8_PLUS_AUTO_CONFIG</id>
+            <activation>
+                <jdk>(,8]</jdk>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- JDK 8- should use rt.jar -->
+                        <plugin>
+                            <groupId>com.github.wvengen</groupId>
+                            <artifactId>proguard-maven-plugin</artifactId>
+                            <executions>
+                                <execution>
+                                    <configuration>
+                                        <libs>
+                                            <lib>${java.home}/lib/rt.jar</lib>
+                                        </libs>
+                                    </configuration>
+                                </execution>
+                            </executions>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_7</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk7</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <source>7</source>
+                                <target>7</target>
+                            </configuration>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_7_ERRORPRONE</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk7_w_errorprone</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <version>${commonConfig.compile.plugin.version}</version>
+                            <configuration>
+                                <compilerId>javac-with-errorprone</compilerId>
+                                <forceJavacCompilerUse>true</forceJavacCompilerUse>
+                                <source>1.7</source>
+                                <target>1.7</target>
+                            </configuration>
+                            <dependencies>
+                                <dependency>
+                                    <groupId>org.codehaus.plexus</groupId>
+                                    <artifactId>plexus-compiler-javac-errorprone</artifactId>
+                                    <version>2.8.2</version>
+                                </dependency>
+                                <!-- override plexus-compiler-javac-errorprone's dependency on
+                                     Error Prone with the latest version -->
+                                <dependency>
+                                    <groupId>com.google.errorprone</groupId>
+                                    <artifactId>error_prone_core</artifactId>
+                                    <!-- only one compatible with java 7-->
+                                    <version>2.0.5</version>
+                                </dependency>
+                            </dependencies>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_8</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk8</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <source>8</source>
+                                <target>8</target>
+                            </configuration>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_8_ERRORPRONE</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk8_w_errorprone</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <compilerId>javac-with-errorprone</compilerId>
+                                <forceJavacCompilerUse>true</forceJavacCompilerUse>
+                                <source>8</source>
+                                <target>8</target>
+                            </configuration>
+                            <dependencies>
+                                <dependency>
+                                    <groupId>org.codehaus.plexus</groupId>
+                                    <artifactId>plexus-compiler-javac-errorprone</artifactId>
+                                    <version>2.8.6</version>
+                                </dependency>
+                                <!-- override plexus-compiler-javac-errorprone's dependency on
+                                     Error Prone with the latest version -->
+                                <dependency>
+                                    <groupId>com.google.errorprone</groupId>
+                                    <artifactId>error_prone_core</artifactId>
+                                    <!-- only one compatible with java 7-->
+                                    <version>${commonConfig.compile.errorprone.version}</version>
+                                </dependency>
+                            </dependencies>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_11</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk11</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <release>11</release>
+                            </configuration>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_11_ERRORPRONE</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk11_w_errorprone</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <release>11</release>
+                                <compilerArgs>
+                                    <arg>-XDcompilePolicy=simple</arg>
+                                    <arg>-Xplugin:ErrorProne</arg>
+                                </compilerArgs>
+                                <annotationProcessorPaths>
+                                    <path>
+                                        <groupId>com.google.errorprone</groupId>
+                                        <artifactId>error_prone_core</artifactId>
+                                        <version>${commonConfig.compile.errorprone.version}</version>
+                                    </path>
+                                </annotationProcessorPaths>
+                            </configuration>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+        <profile>
+            <id>JDK_14</id>
+            <activation>
+                <property>
+                    <name>commonConfig.compiler.profile</name>
+                    <value>jdk14</value>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!-- error prone support -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-compiler-plugin</artifactId>
+                            <configuration>
+                                <release>14</release>
+                            </configuration>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+
+        <!-- Deployment profile (required so these plugins are only used when deploying) -->
+        <profile>
+            <id>deploy</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.plugins</groupId>
+                        <artifactId>nexus-staging-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+
+            <distributionManagement>
+                <repository>
+                    <id>ossrh</id>
+                    <name>Central Repository OSSRH</name>
+                    <url>https://oss.sonatype.org/service/local/staging/deploy/maven2</url>
+                </repository>
+                <snapshotRepository>
+                    <id>ossrh-snapshots</id>
+                    <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+                </snapshotRepository>
+            </distributionManagement>
+        </profile>
+    </profiles>
+
+    <developers>
+        <developer>
+            <id>patrickfav</id>
+            <name>Patrick Favre-Bulle</name>
+            <email>patrick@favre.at</email>
+        </developer>
+    </developers>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:https://github.com/patrickfav/mvn-common-parent.git</connection>
+        <developerConnection>scm:git:https://github.com/patrickfav/mvn-common-parent.git</developerConnection>
+        <url>https://github.com/patrickfav/mvn-common-parent</url>
+    </scm>
+</project>
