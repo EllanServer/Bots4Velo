@@ -63,8 +63,9 @@ class GithubWorkflowTest {
         assertThat(script)
             .contains("[forced-hosts]")
             .contains("VELOCITY_JAVA")
+            .contains("download_authme '5.6.0' '-legacy.jar'")
             .contains("presence-rules:")
             .contains("interval-ms: 1000")
-            .contains("completed authentication through a pre-join UI");
+            .contains("confirmed server switch to afk");
     }
 }

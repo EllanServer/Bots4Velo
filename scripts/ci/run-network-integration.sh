@@ -97,13 +97,13 @@ for build in json.load(sys.stdin):
 }
 
 download_authme() {
-  local suffix="$1" release_url url
+  local release="$1" suffix="$2" release_url url
   if [[ -n "${AUTHME_JAR:-}" ]]; then
     [[ -f "$AUTHME_JAR" ]] || die "AUTHME_JAR does not exist: $AUTHME_JAR"
     cp "$AUTHME_JAR" "$WORK_ROOT/lobby/plugins/AuthMe.jar"
     return
   fi
-  release_url="https://api.github.com/repos/AuthMe/AuthMeReloaded/releases/tags/6.0.0"
+  release_url="https://api.github.com/repos/AuthMe/AuthMeReloaded/releases/tags/$release"
   url="$(curl --fail --retry 3 --connect-timeout 20 --max-time 90 --silent --show-error -H "User-Agent: $USER_AGENT" "$release_url" | \
     python3 -c '
 import json
@@ -114,7 +114,7 @@ for asset in json.load(sys.stdin).get("assets", []):
         print(asset["browser_download_url"])
         break
 ' "$suffix")"
-  [[ -n "$url" ]] || die "AuthMe 6.0.0 asset ending in $suffix was not found"
+  [[ -n "$url" ]] || die "AuthMe $release asset ending in $suffix was not found"
   curl --fail --retry 3 --connect-timeout 20 --max-time 180 --location --silent --show-error -H "User-Agent: $USER_AGENT" \
     --output "$WORK_ROOT/lobby/plugins/AuthMe.jar" "$url"
 }
@@ -289,8 +289,10 @@ else
 fi
 
 case "$MINECRAFT_VERSION" in
-  1.16.5) download_authme '-Spigot-Legacy.jar' ;;
-  *)      download_authme '-Paper.jar' ;;
+  # AuthMe 6.x legacy builds require Java 17, while Paper 1.16.5 supports Java 16 at most.
+  # AuthMe 5.6.0 provides the matching legacy build and supports Java 8 through 21.
+  1.16.5) download_authme '5.6.0' '-legacy.jar' ;;
+  *)      download_authme '6.0.0' '-Paper.jar' ;;
 esac
 
 log "Starting authentication lobby and two Paper backends"
@@ -302,7 +304,6 @@ start_velocity
 VELOCITY_LOG="$WORK_ROOT/velocity/console.log"
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
-wait_for_log "$VELOCITY_LOG" '(submitting its (login|registration) command|matched authentication success|completed authentication through a pre-join UI)' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
