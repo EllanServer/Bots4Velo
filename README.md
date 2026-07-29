@@ -456,8 +456,9 @@ Bots4Velo 仍支持 AuthMe 6 自带的 preJoin/postJoin Dialog，以及 Smart Au
 Title/Subtitle 和默认 `Authenticated` 成功标题。部署时只选择一套主要 UI，避免两个插件同时发送认证表单。
 默认正则覆盖 AuthMe 的 `/register`、`/login`、`Successfully registered!`、`Successful login!` 和常见
 session reconnect/中文成功消息；自定义聊天文案时应同步更新机器人的 `login-prompts`、`register-prompts`
-与 `success-messages`。未声明 `success-messages` 时会使用这组安全默认值；显式配置为空列表则不会把
-Dialog 提交本身当作成功，native UI 会保持 fail-closed 并最终报告认证超时。Smart AuthMe Login UI 的
+与 `success-messages`。未声明 `success-messages` 时会使用这组安全默认值；显式配置为空列表不会把
+Dialog 提交本身当作成功。pre-join AuthMeUI 仍可在服务端接受凭据并放行进入 PLAY 后完成认证；post-join
+或聊天认证没有可匹配的成功消息时则保持 fail-closed，并最终报告认证超时。Smart AuthMe Login UI 的
 `premiumNameProtection` 可能拒绝与 Mojang 正版账号同名的
 离线机器人，生产服应使用不会撞名的专用机器人名称或按插件安全策略单独放行。
 
