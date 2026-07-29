@@ -100,7 +100,7 @@ jobs:
       - name: Start and verify the disposable network
         run: |
           chmod +x scripts/ci/run-network-integration.sh
-          scripts/ci/run-network-integration.sh "${{ matrix.minecraft }}" "${{ matrix.protocol }}"
+          VELOCITY_JAVA="${JAVA_HOME_21_X64}/bin/java" scripts/ci/run-network-integration.sh "${{ matrix.minecraft }}" "${{ matrix.protocol }}"
 
       - name: Upload integration logs
         if: always()

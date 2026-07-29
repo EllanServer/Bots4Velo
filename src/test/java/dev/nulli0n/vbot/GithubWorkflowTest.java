@@ -52,6 +52,7 @@ class GithubWorkflowTest {
             .contains("minecraft: \"1.21.11\"")
             .contains("minecraft: \"26.1.2\"")
             .contains("minecraft: \"26.2\"")
+            .contains("VELOCITY_JAVA=\"${JAVA_HOME_21_X64}/bin/java\"")
             .contains("scripts/ci/run-network-integration.sh");
     }
 
@@ -61,7 +62,9 @@ class GithubWorkflowTest {
 
         assertThat(script)
             .contains("[forced-hosts]")
+            .contains("VELOCITY_JAVA")
             .contains("presence-rules:")
-            .contains("interval-ms: 1000");
+            .contains("interval-ms: 1000")
+            .contains("completed authentication through a pre-join UI");
     }
 }

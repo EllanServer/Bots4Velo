@@ -11,6 +11,7 @@ PROTOCOL_ID="${2:?usage: run-network-integration.sh <minecraft-version> <protoco
 WORK_ROOT="${WORK_ROOT:-$PWD/.integration-network/$MINECRAFT_VERSION}"
 PLUGIN_JAR="${PLUGIN_JAR:-$PWD/build/libs/bots4velo-*.jar}"
 PAPER_JAVA="${PAPER_JAVA:-${JAVA_HOME:-}/bin/java}"
+VELOCITY_JAVA="${VELOCITY_JAVA:-$PAPER_JAVA}"
 USER_AGENT="bots4velo-integration/2.4.0 (https://github.com/Bots4Velo/Bots4Velo)"
 PROXY_PORT="${PROXY_PORT:-25590}"
 LOBBY_PORT="${LOBBY_PORT:-25591}"
@@ -29,6 +30,10 @@ if [[ "$(uname -s)" == "Linux" && "$PAPER_JAVA" == *.exe ]]; then
   die "PAPER_JAVA must be a native Linux JDK when running under Linux/WSL; install Java in WSL or run this script from Git Bash."
 fi
 [[ -x "$PAPER_JAVA" ]] || die "PAPER_JAVA is not executable: $PAPER_JAVA"
+if [[ "$(uname -s)" == "Linux" && "$VELOCITY_JAVA" == *.exe ]]; then
+  die "VELOCITY_JAVA must be a native Linux JDK when running under Linux/WSL."
+fi
+[[ -x "$VELOCITY_JAVA" ]] || die "VELOCITY_JAVA is not executable: $VELOCITY_JAVA"
 
 cleanup() {
   local process
@@ -249,7 +254,7 @@ bots:
 EOF
   (
     cd "$velocity_directory"
-    exec "$PAPER_JAVA" -Xms256M -Xmx768M -jar velocity.jar
+    exec "$VELOCITY_JAVA" -Xms256M -Xmx768M -jar velocity.jar
   ) > "$velocity_directory/console.log" 2>&1 &
   PIDS+=("$!")
   VELOCITY_PID="$!"
@@ -297,7 +302,7 @@ start_velocity
 VELOCITY_LOG="$WORK_ROOT/velocity/console.log"
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
-wait_for_log "$VELOCITY_LOG" '(submitting its (login|registration) command|matched authentication success)' 90
+wait_for_log "$VELOCITY_LOG" '(submitting its (login|registration) command|matched authentication success|completed authentication through a pre-join UI)' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
