@@ -64,6 +64,7 @@ class GithubWorkflowTest {
             .contains("[forced-hosts]")
             .contains("VELOCITY_JAVA")
             .contains("download_authme '5.6.0' '-legacy.jar'")
+            .contains("fallback-register-delay-ms: 1500")
             .contains("presence-rules:")
             .contains("interval-ms: 1000")
             .contains("confirmed server switch to afk");

@@ -226,7 +226,8 @@ bots:
       login-command: "login {password}"
       register-command: "register {password} {password}"
       login-delay-ms: 250
-      fallback-register-delay-ms: 500
+      # AuthMe 5.6 legacy throttles a registration immediately following /login.
+      fallback-register-delay-ms: 1500
       after-auth-delay-ms: 250
       timeout-ms: 30000
       login-prompts: ["(?i)(please login|/login)"]
