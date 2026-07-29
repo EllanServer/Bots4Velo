@@ -5,7 +5,6 @@ import dev.nulli0n.vbot.backend.protocol.BackendGameMode;
 import dev.nulli0n.vbot.backend.protocol.BackendInvulnerability;
 import dev.nulli0n.vbot.backend.protocol.BackendPolicy;
 import dev.nulli0n.vbot.backend.protocol.BackendStatus;
-import dev.nulli0n.vbot.backend.protocol.RespawnMode;
 import dev.nulli0n.vbot.backend.protocol.RespawnPoint;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
@@ -166,13 +165,10 @@ final class PaperPolicyService {
 
     private boolean sameRespawn(Location requested, RespawnPoint actual) {
         if (requested == null) {
-            return actual.mode() == RespawnMode.CLEAR;
+            return RespawnLocationMatcher.clearMatches(actual);
         }
-        return actual.mode() == RespawnMode.FIXED && requested.getWorld() != null
-            && requested.getWorld().getName().equals(actual.world())
-            && Math.abs(requested.getX() - actual.x()) < 0.001D
-            && Math.abs(requested.getY() - actual.y()) < 0.001D
-            && Math.abs(requested.getZ() - actual.z()) < 0.001D;
+        return requested.getWorld() != null && RespawnLocationMatcher.sameBlock(
+            requested.getWorld().getName(), requested.getX(), requested.getY(), requested.getZ(), actual);
     }
 
     private boolean finite(double value) {
