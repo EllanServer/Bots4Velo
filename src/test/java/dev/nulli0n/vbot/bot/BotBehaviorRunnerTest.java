@@ -29,7 +29,7 @@ class BotBehaviorRunnerTest {
         try {
             runner.onReady();
             assertThat(target.action.await(1, TimeUnit.SECONDS)).isTrue();
-            BehaviorSnapshot snapshot = runner.snapshot();
+            BehaviorSnapshot snapshot = awaitCompletedCycle(runner);
             assertThat(snapshot.cycles()).isGreaterThanOrEqualTo(1);
             assertThat(target.looks).isGreaterThanOrEqualTo(1);
             assertThat(target.moves).isGreaterThanOrEqualTo(1);
@@ -60,6 +60,16 @@ class BotBehaviorRunnerTest {
             runner.close();
             executor.shutdownNow();
         }
+    }
+
+    private static BehaviorSnapshot awaitCompletedCycle(BotBehaviorRunner runner) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        BehaviorSnapshot snapshot = runner.snapshot();
+        while (snapshot.cycles() < 1 && System.nanoTime() < deadline) {
+            Thread.sleep(5L);
+            snapshot = runner.snapshot();
+        }
+        return snapshot;
     }
 
     private static final class FakeTarget implements BehaviorTarget {
