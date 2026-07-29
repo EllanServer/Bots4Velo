@@ -200,6 +200,14 @@ runtime:
     multiplier: 1.0
     jitter: 0.0
     maximum-attempts: 6
+  # Do not let the deliberately failing authentication fixture trip AuthMe's
+  # global command rate limit while IntegrationBot is registering.
+  schedules:
+    - id: "start-timeout-fixture"
+      action: "start"
+      selector: "AuthenticationTimeout"
+      initial-delay-ms: 15000
+      interval-ms: 3600000
   # Keeps the integration bot assigned to AFK. This deliberately retries the
   # assignment after a backend/network interruption so the test can prove the
   # bot returns to the recovered backend rather than merely proving its port
@@ -235,7 +243,7 @@ bots:
       success-messages: ["(?i)(registered successfully|logged in successfully|login successful)"]
       failure-messages: ["(?i)(incorrect password|captcha|2fa|verification code|banned)"]
   AuthenticationTimeout:
-    enabled: true
+    enabled: false
     username: "B4VTimeout${PROTOCOL_ID}"
     password: "Bots4VeloTest"
     auth:
@@ -244,8 +252,10 @@ bots:
       mode: "LOGIN"
       login-command: "b4vnoop"
       register-command: "b4vnoop"
-      login-delay-ms: 100
-      fallback-register-delay-ms: 100
+      # Its auth timeout expires before either command is sent. That exercises
+      # the pre-join UI timeout without producing an AuthMe command attempt.
+      login-delay-ms: 5000
+      fallback-register-delay-ms: 5000
       after-auth-delay-ms: 0
       timeout-ms: 2500
       login-prompts: ["(?i)(please login|/login)"]
@@ -306,8 +316,8 @@ VELOCITY_LOG="$WORK_ROOT/velocity/console.log"
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
-wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
+wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 
 log "Fault test: interrupt AFK backend, then prove the presence rule restores the bot"
 velocity_log_lines=$(wc -l < "$VELOCITY_LOG")
