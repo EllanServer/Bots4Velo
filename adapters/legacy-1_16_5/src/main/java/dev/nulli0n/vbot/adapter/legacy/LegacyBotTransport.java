@@ -81,9 +81,11 @@ final class LegacyBotTransport implements BotTransport {
     @Override
     public void disconnect(String reason) {
         Session active = session;
-        session = null;
-        if (active != null && active.isConnected()) {
+        if (active != null) {
             active.disconnect(reason);
+            if (session == active) {
+                session = null;
+            }
         }
     }
 

@@ -15,7 +15,7 @@ import java.util.function.Predicate;
 
 /** Builds the compact, clickable help UI without relying on client-version-specific formatting. */
 final class HelpRenderer {
-    static final int PAGE_COUNT = 4;
+    static final int PAGE_COUNT = 5;
 
     private static final String VIEW_PERMISSION = "bots4velo.view";
     private static final String CONTROL_PERMISSION = "bots4velo.control";
@@ -23,35 +23,40 @@ final class HelpRenderer {
     private static final String RELOAD_PERMISSION = "bots4velo.reload";
 
     private static final List<HelpEntry> ENTRIES = List.of(
-        entry(1, "/vbot list", "/vbot list", "help-list", "List bots, states, servers and labels", VIEW_PERMISSION),
+        entry(1, "/vbot list [selector] [filters]", "/vbot list ", "help-list-v29", "Filter and page bots, states, servers and labels", VIEW_PERMISSION),
         entry(1, "/vbot status <id>", "/vbot status ", "help-status", "Show detailed bot status", VIEW_PERMISSION),
         entry(1, "/vbot history <id>", "/vbot history ", "help-history", "Show recent bot events", VIEW_PERMISSION),
         entry(1, "/vbot doctor [selector]", "/vbot doctor ", "help-doctor", "Diagnose configuration and connectivity", VIEW_PERMISSION),
         entry(1, "/vbot monitor [id]", "/vbot monitor ", "help-monitor", "Output monitoring JSON", VIEW_PERMISSION),
-        entry(1, "/vbot servers", "/vbot servers", "help-servers", "List Velocity backends", VIEW_PERMISSION),
-        entry(1, "/vbot server <selector> <server>", "/vbot server ", "help-server", "Switch bots to a backend", CONTROL_PERMISSION),
-        entry(1, "/vbot movehere <selector>", "/vbot movehere ", "help-movehere", "Bring bots to your server", CONTROL_PERMISSION),
+        entry(1, "/vbot queue [selector] [--page n]", "/vbot queue ", "help-queue", "Show pending starts and reconnects", VIEW_PERMISSION),
 
+        entry(2, "/vbot servers", "/vbot servers", "help-servers", "List Velocity backends", VIEW_PERMISSION),
+        entry(2, "/vbot server <selector> <server>", "/vbot server ", "help-server", "Switch bots to a backend", CONTROL_PERMISSION),
+        entry(2, "/vbot movehere <selector>", "/vbot movehere ", "help-movehere", "Bring bots to your server", CONTROL_PERMISSION),
         entry(2, "/vbot start|stop|reconnect <selector>", "/vbot start ", "help-lifecycle", "Control connections", CONTROL_PERMISSION),
         entry(2, "/vbot command <selector> <command>", "/vbot command ", "help-command", "Run a command as bots", CONTROL_PERMISSION),
-        entry(2, "/vbot behavior <selector> <action>", "/vbot behavior ", "help-behavior", "Start, pause or inspect behavior", CONTROL_PERMISSION),
-        entry(2, "/vbot behavior <selector> follow <player>", "/vbot behavior ", "help-follow", "Follow or unfollow a player", CONTROL_PERMISSION),
-        entry(2, "/vbot position <id>", "/vbot position ", "help-position", "Show the protocol position", VIEW_PERMISSION),
-        entry(2, "/vbot move <id> <x> <y> <z>", "/vbot move ", "help-move", "Move a bot", CONTROL_PERMISSION),
-        entry(2, "/vbot look <id> <yaw> <pitch>", "/vbot look ", "help-look", "Rotate a bot", CONTROL_PERMISSION),
-        entry(3, "/vbot create <id> <name> ...", "/vbot create ", "help-create", "Create a persistent bot", CREATE_PERMISSION),
-        entry(3, "/vbot remove <id>", "/vbot remove ", "help-remove", "Remove a managed bot", CREATE_PERMISSION),
-        entry(3, "/vbot reload", "/vbot reload", "help-reload", "Validate and reload configuration", RELOAD_PERMISSION),
-        entry(3, "/vbot language", "/vbot language", "help-language-view", "Show the current UI language", VIEW_PERMISSION),
-        entry(3, "/vbot language <locale>", "/vbot language ", "help-language-set", "Switch the global UI language", RELOAD_PERMISSION),
+        entry(2, "/vbot hold <selector> [--ttl 30m] [reason]", "/vbot hold ", "help-hold", "Stop and maintenance-lock bots", CONTROL_PERMISSION),
+        entry(2, "/vbot resume <selector>", "/vbot resume ", "help-resume", "Remove a maintenance lock", CONTROL_PERMISSION),
 
-        entry(4, "/vbot afk <selector> status", "/vbot afk ", "help-afk-status", "Inspect the actual AFK policy", VIEW_PERMISSION),
-        entry(4, "/vbot afk <selector> <preset|set|unmanage>", "/vbot afk ", "help-afk-change", "Apply or stop managing an AFK policy", CONTROL_PERMISSION),
-        entry(4, "/vbot recover <selector>", "/vbot recover ", "help-recover", "Heal, feed, extinguish and respawn", CONTROL_PERMISSION),
-        entry(4, "/vbot invulnerable <selector> <on|off|keep>", "/vbot invulnerable ", "help-invulnerable", "Manage backend invulnerability", CONTROL_PERMISSION),
-        entry(4, "/vbot gamemode <selector> <mode|unchanged>", "/vbot gamemode ", "help-gamemode", "Manage backend game mode", CONTROL_PERMISSION),
-        entry(4, "/vbot spawnpoint <selector> <mode>", "/vbot spawnpoint ", "help-spawnpoint", "Manage the respawn point", CONTROL_PERMISSION),
-        entry(4, "/vbot respawn <selector>", "/vbot respawn ", "help-respawn", "Request a backend respawn", CONTROL_PERMISSION)
+        entry(3, "/vbot behavior <selector> <action>", "/vbot behavior ", "help-behavior", "Start, pause or inspect behavior", CONTROL_PERMISSION),
+        entry(3, "/vbot behavior <selector> follow <player>", "/vbot behavior ", "help-follow", "Follow or unfollow a player", CONTROL_PERMISSION),
+        entry(3, "/vbot position <id>", "/vbot position ", "help-position", "Show the protocol position", VIEW_PERMISSION),
+        entry(3, "/vbot move <id> <x> <y> <z>", "/vbot move ", "help-move", "Move a bot", CONTROL_PERMISSION),
+        entry(3, "/vbot look <id> <yaw> <pitch>", "/vbot look ", "help-look", "Rotate a bot", CONTROL_PERMISSION),
+
+        entry(4, "/vbot create <id> <name> ...", "/vbot create ", "help-create", "Create a persistent bot", CREATE_PERMISSION),
+        entry(4, "/vbot remove <id>", "/vbot remove ", "help-remove", "Remove a managed bot", CREATE_PERMISSION),
+        entry(4, "/vbot reload [--check]", "/vbot reload --check", "help-reload-v29", "Preview or safely reload configuration", RELOAD_PERMISSION),
+        entry(4, "/vbot language", "/vbot language", "help-language-view", "Show the current UI language", VIEW_PERMISSION),
+        entry(4, "/vbot language <locale>", "/vbot language ", "help-language-set", "Switch the global UI language", RELOAD_PERMISSION),
+
+        entry(5, "/vbot afk <selector> status", "/vbot afk ", "help-afk-status", "Inspect the actual AFK policy", VIEW_PERMISSION),
+        entry(5, "/vbot afk <selector> <preset|set|unmanage>", "/vbot afk ", "help-afk-change", "Apply or stop managing an AFK policy", CONTROL_PERMISSION),
+        entry(5, "/vbot recover <selector>", "/vbot recover ", "help-recover", "Heal, feed, extinguish and respawn", CONTROL_PERMISSION),
+        entry(5, "/vbot invulnerable <selector> <on|off|keep>", "/vbot invulnerable ", "help-invulnerable", "Manage backend invulnerability", CONTROL_PERMISSION),
+        entry(5, "/vbot gamemode <selector> <mode|unchanged>", "/vbot gamemode ", "help-gamemode", "Manage backend game mode", CONTROL_PERMISSION),
+        entry(5, "/vbot spawnpoint <selector> <mode>", "/vbot spawnpoint ", "help-spawnpoint", "Manage the respawn point", CONTROL_PERMISSION),
+        entry(5, "/vbot respawn <selector>", "/vbot respawn ", "help-respawn", "Request a backend respawn", CONTROL_PERMISSION)
     );
 
     private HelpRenderer() {
@@ -80,7 +85,7 @@ final class HelpRenderer {
             output.add(Component.text(messages.text("help-selectors",
                 "Selectors: all, @group:<name>, @tag:<name>, @server:<name>"), NamedTextColor.DARK_GRAY));
         }
-        if (page == 4) {
+        if (page == 5) {
             output.add(Component.text(messages.text("help-paper-note",
                 "Player-state commands require the Paper companion."), NamedTextColor.DARK_GRAY));
         }
@@ -99,10 +104,11 @@ final class HelpRenderer {
     }
 
     private static Component header(PluginMessages messages, int page) {
-        String section = messages.text("help-section-" + page, switch (page) {
-            case 1 -> "Overview and servers";
-            case 2 -> "Control and movement";
-            case 3 -> "Administration and language";
+        String section = messages.text("help-section-v29-" + page, switch (page) {
+            case 1 -> "Overview and queue";
+            case 2 -> "Servers and lifecycle";
+            case 3 -> "Behavior and movement";
+            case 4 -> "Administration and language";
             default -> "Paper player state";
         });
         return Component.text("----- ", NamedTextColor.DARK_GRAY)

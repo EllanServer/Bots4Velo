@@ -141,9 +141,11 @@ final class ModernBotTransport implements BotTransport {
     @Override
     public void disconnect(String reason) {
         ClientSession active = session;
-        session = null;
-        if (active != null && active.isConnected()) {
+        if (active != null) {
             active.disconnect(reason);
+            if (session == active) {
+                session = null;
+            }
         }
     }
 

@@ -40,8 +40,13 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 - `runtime.maximum-bots` 是静态机器人和运行时机器人合计的硬上限。
 - `/vbot status` 提供当前协议/状态以及本进程内累计 PLAY、非人工断线、资源包成功次数和时间戳，
   用于稳定性观察与故障审计。
+- `/vbot list` 支持选择器、状态、后端、失败状态筛选和固定分页；`/vbot queue` 显示待执行启动/
+  重连的队列顺序与预计执行时间（ETA）。
+- `/vbot hold` 可用原因和 TTL 维护锁批量停止机器人并阻止手动或自动重新上线；`/vbot resume`
+  只解除维护锁，之后由管理员明确启动。维护锁在安全重载时保留。
+- `/vbot reload --check` 会严格验证候选配置并输出脱敏差异，不替换配置或影响正在运行的机器人。
 - 默认英文、内置简体中文及自定义语言目录；可用 `/vbot language` 安全热切换，不会重启机器人。
-- 四页权限感知帮助界面，命令可点击填入、翻页可点击执行，并提供悬停说明和权限节点。
+- 五页权限感知帮助界面，默认英文、可选中文；命令可点击填入、翻页可点击执行，并提供悬停说明和权限节点。
 - 协议级绝对位置和视角控制，并可输出单个或全部机器人的 JSON 监控快照。
 - 通过带 HMAC 签名和防重放校验的 Paper 伴侣设置无敌、游戏模式、挂机属性与重生点，并支持
   手动重生和一键恢复生命/饥饿/着火状态。
@@ -63,8 +68,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 
 默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-- `bots4velo-2.8.0.jar`：安装到 Velocity 的 `plugins` 目录；
-- `bots4velo-paper-2.8.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+- `bots4velo-2.9.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-2.9.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
 
 也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
@@ -91,7 +96,7 @@ git push origin v2.0.0
 `bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
 测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
 
-`v2.8.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
+`v2.9.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
 同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
 
 ## 集成验证
@@ -134,8 +139,9 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 管理权限为 `bots4velo.admin`。命令包括：
 
 ```text
-/vbot help [1|2|3|4]
-/vbot list
+/vbot help [1|2|3|4|5]
+/vbot list [id|selector] [--state <state>] [--server <server>] [--failed] [--page <n>]
+/vbot queue [id|selector] [--state <state>] [--server <server>] [--failed] [--page <n>]
 /vbot status <id>
 /vbot monitor [id]
 /vbot doctor [id|selector]
@@ -150,6 +156,8 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot start <id|selector>
 /vbot stop <id|selector>
 /vbot reconnect <id|selector>
+/vbot hold <id|selector> [--ttl <number><s|m|h|d>] [reason...]
+/vbot resume <id|selector>
 /vbot command <id|selector> <command...>
 /vbot behavior <id|selector> <start|pause|status>
 /vbot afk <id|selector> status
@@ -163,7 +171,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot spawnpoint <id|selector> set <world> <x> <y> <z> [yaw]
 /vbot respawn <id|selector>
 /vbot language [locale]
-/vbot reload
+/vbot reload [--check]
 ```
 
 ### 分组、选择器与权限
@@ -178,6 +186,17 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot reconnect @server:lobby
 ```
 
+`list` 与 `queue` 可以组合这些选择器和筛选项；结果按机器人 ID 稳定排序，每页最多 8 项。`--state`
+接受 `STOPPED`、`CONNECTING`、`LOGIN`、`CONFIGURATION`、`PLAY`、`RECONNECT_WAIT`、`STOPPING` 或
+`FAILED`，`--server` 按当前后端筛选，`--failed` 只保留失败状态或已有失败分类的机器人。翻页按钮会保留
+原选择器和全部筛选条件。常用示例：
+
+```text
+/vbot list @farm --state PLAY --server survival --page 2
+/vbot list all --failed
+/vbot queue @server:lobby --page 1
+```
+
 当 TAB 已安装时，机器人可设置 `display-name` 和 `tab-group`。Bots4Velo 会在机器人上线后以 TAB 的
 临时 API 应用它们，并在重连后自动恢复；可在 TAB 的格式规则中使用 `%bots4velo_tab_group%` 占位符。
 这些覆盖不会写入或修改 TAB 的 `users.yml` / `groups.yml`。
@@ -185,6 +204,37 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 权限默认采用最小职责划分：`bots4velo.view` 用于查看、`bots4velo.control` 用于连接与移动控制、
 `bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
 `bots4velo.admin` 拥有全部权限。
+
+### 2.9.0 运维控制
+
+维护锁适合后端升级、账号排查和临时停机。`hold` 会立即停止匹配的机器人、取消尚未执行的启动，随后阻止
+手动 `start`/`reconnect` 以及计划任务、presence 保活和断线自动重连再次将它们上线。可写自由文本原因；
+`--ttl` 接受正整数加 `s`、`m`、`h` 或 `d`，最长 30 天，不写 TTL 时保持到手动解除。安全
+`/vbot reload` 会把仍有效的维护锁和剩余到期时间带入新管理器。
+
+```text
+/vbot hold @farm --ttl 30m farm backend maintenance
+/vbot hold @server:lobby investigating authentication
+/vbot resume @farm
+/vbot start @farm
+```
+
+`resume` 只解除维护锁，不会立即启动机器人；这样管理员可以先分批解锁，再通过 `start` 控制上线节奏。
+`/vbot list` 和 `/vbot status` 会显示维护锁及原因。`/vbot queue` 仅列出确实等待执行的启动和重连，包含
+顺序、原因与 ETA；永久维护锁不会伪装成队列任务。
+
+修改配置前可先执行只读预检：
+
+```text
+/vbot reload --check
+/vbot reload
+```
+
+`--check` 会使用与正式重载相同的严格解析和验证流程，但不会替换线上配置或停止机器人。输出只含
+代理/运行时变更类别、机器人 ID 和发生变化的字段名；密码、后端共享密钥及其他机密值不会出现在差异中。
+确认预览后再执行不带参数的 `/vbot reload` 应用配置。正式重载会先暂停替代管理器的全部激活，关闭旧连接，
+并轮询 Velocity 在线玩家表；只有所有旧机器人用户名都已注销后才启动新机器人，从而避免零延迟配置下的
+同名重复登录。交接期间 `start`/`reconnect` 会给出明确提示，`/vbot doctor` 与监控 JSON 也会显示暂停状态。
 
 ### Paper 后端玩家状态与挂机控制
 
@@ -279,12 +329,15 @@ bots:
 自定义覆写；YAML 损坏、未知语言或翻译占位符不兼容时不会破坏当前运行状态。命令名称、选择器、状态枚举与 JSON
 字段保持英文，便于脚本、文档和跨语言管理员使用一致语法。
 
-`/vbot help` 分为概览、控制、管理与语言、Paper 玩家状态四页。帮助只显示执行者有权使用的命令；点击命令会把
-命令安全填入聊天栏，只有只读翻页和查看操作会直接执行。悬停可查看说明和所需权限。
+`/vbot help` 分为概览与队列、服务器与生命周期、行为与移动、管理与语言、Paper 玩家状态五页。帮助只显示
+执行者有权使用的命令；点击命令会把命令安全填入聊天栏，只有只读翻页和查看操作会直接执行。悬停可查看
+说明和所需权限。界面默认使用英文；需要中文时执行 `/vbot language zh_CN`，切回英文使用
+`/vbot language en_US`。
 
 `/vbot doctor [id|selector]` 会先进行不替换线上机器人的配置验证，再报告后端数量、TAB/
-VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、资源包和 Auth UI 计数。`/vbot reload`
-会先完整解析并构造替代管理器，解析失败时保留当前运行中的机器人。
+VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、资源包和 Auth UI 计数。`/vbot reload --check`
+可在不替换线上对象的前提下预览脱敏差异；正式 `/vbot reload` 会先完整解析并构造替代管理器，解析失败时
+保留当前运行中的机器人，成功时也会保留尚未到期的维护锁。
 
 ### 模板、机密与基础挂机行为
 
@@ -375,7 +428,7 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 ### AuthMe、AuthMeUI 与 Smart AuthMe Login UI
 
 这里的 **AuthMeUI** 特指 [`TejasLamba2006/AuthMeUI 1.3.4`](https://modrinth.com/plugin/authmeui/version/1.3.4)，
-不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.8.0 支持它的两种工作方式：
+不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.9.0 支持它的两种工作方式：
 
 - pre-join：在 CONFIGURATION 阶段依次处理服务器规则、注册或登录 Dialog，完成后才进入 PLAY；
 - post-join：进入 PLAY 后处理 AuthMeUI 的登录/注册 Dialog，再继续切服和登录后命令；

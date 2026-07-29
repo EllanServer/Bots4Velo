@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -52,6 +53,7 @@ public final class BotSession implements BehaviorTarget {
     private final AuthenticationSettleGate authenticationSettle;
     private final BotEventLog events;
     private final Consumer<BotEvent> eventSink;
+    private final BooleanSupplier maintenanceBlocked;
     private final AtomicReference<BotState> state = new AtomicReference<>(BotState.STOPPED);
     private final AtomicBoolean manualStop = new AtomicBoolean(true);
     private final AtomicBoolean authenticationInterventionRequired = new AtomicBoolean();
@@ -89,6 +91,7 @@ public final class BotSession implements BehaviorTarget {
     private volatile Instant connectedAt;
     private volatile Instant lastPlayAt;
     private volatile Instant lastDisconnectAt;
+    private volatile ConnectionAttemptSnapshot nextConnectionAttempt;
     private volatile ProtocolVersion activeProtocolVersion;
     private volatile String activeProtocol = "unresolved";
     private volatile String activeProtocolSource = "unresolved";
@@ -100,13 +103,21 @@ public final class BotSession implements BehaviorTarget {
                       ConnectionRateLimiter connectionRateLimiter,
                       ScheduledExecutorService executor, Logger logger) {
         this(definition, endpoint, runtime, protocolResolver, transportRegistry, connectionRateLimiter, executor,
-            logger, ignored -> { });
+            logger, ignored -> { }, () -> false);
     }
 
     public BotSession(BotDefinition definition, ProxyEndpoint endpoint, RuntimeConfig runtime,
                       ProtocolResolver protocolResolver, TransportRegistry transportRegistry,
                       ConnectionRateLimiter connectionRateLimiter,
                       ScheduledExecutorService executor, Logger logger, Consumer<BotEvent> eventSink) {
+        this(definition, endpoint, runtime, protocolResolver, transportRegistry, connectionRateLimiter, executor,
+            logger, eventSink, () -> false);
+    }
+
+    BotSession(BotDefinition definition, ProxyEndpoint endpoint, RuntimeConfig runtime,
+               ProtocolResolver protocolResolver, TransportRegistry transportRegistry,
+               ConnectionRateLimiter connectionRateLimiter, ScheduledExecutorService executor,
+               Logger logger, Consumer<BotEvent> eventSink, BooleanSupplier maintenanceBlocked) {
         this.definition = definition;
         this.endpoint = endpoint;
         this.runtime = runtime;
@@ -116,6 +127,7 @@ public final class BotSession implements BehaviorTarget {
         this.executor = executor;
         this.logger = logger;
         this.eventSink = eventSink == null ? ignored -> { } : eventSink;
+        this.maintenanceBlocked = maintenanceBlocked == null ? () -> false : maintenanceBlocked;
         this.events = new BotEventLog(definition.id());
         this.reconnectPolicy = new ReconnectPolicy(runtime.reconnect());
         this.behavior = new BotBehaviorRunner(this, definition.behavior(), executor, logger);
@@ -139,8 +151,23 @@ public final class BotSession implements BehaviorTarget {
             behavior.snapshot(), onlineSeconds, FailureCategory.classify(lastDisconnectReason), events.snapshot());
     }
 
+    /** Estimated time of the next connection attempt, if one is currently scheduled. */
+    public Optional<Instant> nextConnectionAttemptAt() {
+        return nextConnectionAttempt().map(ConnectionAttemptSnapshot::scheduledAt);
+    }
+
+    /** Estimated time and operation kind of the next session-level connection attempt. */
+    public Optional<ConnectionAttemptSnapshot> nextConnectionAttempt() {
+        return Optional.ofNullable(nextConnectionAttempt);
+    }
+
+    /** Cancels a session retry when an operator replacement reconnect is queued. */
+    synchronized void cancelPendingConnectionAttempt() {
+        cancelReconnect();
+    }
+
     public synchronized void start() {
-        if (!connectionStartAllowed(state.get())) {
+        if (maintenanceBlocked.getAsBoolean() || !connectionStartAllowed(state.get())) {
             return;
         }
         authenticationInterventionRequired.set(false);
@@ -153,7 +180,8 @@ public final class BotSession implements BehaviorTarget {
      * reconnect after correcting the account or authentication configuration.
      */
     public synchronized void startAutomatically() {
-        if (!automaticStartAllowed(state.get(), authenticationInterventionRequired.get())) {
+        if (maintenanceBlocked.getAsBoolean()
+            || !automaticStartAllowed(state.get(), authenticationInterventionRequired.get())) {
             return;
         }
         startInternal();
@@ -181,10 +209,10 @@ public final class BotSession implements BehaviorTarget {
         }
         manualStop.set(false);
         event("START_REQUESTED", "operator or automatic startup");
-        scheduleConnection(0);
+        scheduleConnection(0, ActivationKind.START);
     }
 
-    public void stop() {
+    public synchronized void stop() {
         manualStop.set(true);
         event("STOPPED", "operator request");
         generation.incrementAndGet();
@@ -198,12 +226,20 @@ public final class BotSession implements BehaviorTarget {
         connectedAt = null;
         if (active != null) {
             state.set(BotState.STOPPING);
-            active.disconnect("Bot stopped by operator");
+            try {
+                active.disconnect("Bot stopped by operator");
+            }
+            catch (RuntimeException exception) {
+                logger.warn("Bot {} transport rejected the stop request", definition.id(), exception);
+            }
         }
         state.set(BotState.STOPPED);
     }
 
     public synchronized void reconnectNow() {
+        if (maintenanceBlocked.getAsBoolean()) {
+            return;
+        }
         authenticationInterventionRequired.set(false);
         reconnectInternal("operator request");
     }
@@ -220,14 +256,21 @@ public final class BotSession implements BehaviorTarget {
         transport = null;
         connectedAt = null;
         if (active != null) {
-            active.disconnect("Bot reconnect requested");
+            try {
+                active.disconnect("Bot reconnect requested");
+            }
+            catch (RuntimeException exception) {
+                logger.warn("Bot {} transport rejected the reconnect disconnect request",
+                    definition.id(), exception);
+            }
         }
         state.set(BotState.RECONNECT_WAIT);
-        scheduleConnection(200);
+        scheduleConnection(200, ActivationKind.RECONNECT);
     }
 
     public synchronized void reconnectAutomatically() {
-        if (!automaticRecoveryAllowed(authenticationInterventionRequired.get())) {
+        if (maintenanceBlocked.getAsBoolean()
+            || !automaticRecoveryAllowed(authenticationInterventionRequired.get())) {
             return;
         }
         reconnectInternal("automatic schedule");
@@ -323,21 +366,25 @@ public final class BotSession implements BehaviorTarget {
     }
 
     private void connectIfNeeded() {
+        long currentGeneration;
         synchronized (this) {
             reconnectTask = null;
-        }
-        if (manualStop.get()) {
-            state.set(BotState.STOPPED);
-            return;
-        }
-        BotTransport active = transport;
-        if (active != null && active.isConnected()) {
-            return;
+            nextConnectionAttempt = null;
+            if (manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+                state.set(BotState.STOPPED);
+                return;
+            }
+            BotTransport active = transport;
+            if (active != null && active.isConnected()) {
+                return;
+            }
+
+            currentGeneration = generation.incrementAndGet();
+            resetConnectionState();
+            state.set(BotState.CONNECTING);
         }
 
-        long currentGeneration = generation.incrementAndGet();
-        resetConnectionState();
-        state.set(BotState.CONNECTING);
+        BotTransport created = null;
         try {
             ProtocolVersion protocol = protocolResolver.resolve();
             activeProtocolVersion = protocol;
@@ -351,19 +398,60 @@ public final class BotSession implements BehaviorTarget {
                 runtime.resourcePackMode() == ResourcePackMode.ACCEPT_WITHOUT_DOWNLOAD,
                 runtime.resourcePackStepDelayMillis(), runtime.autoRespawn()
             );
-            BotTransport created = transportRegistry.create(protocol, transportConfig,
+            if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+                settleCancelledConnection();
+                return;
+            }
+            created = transportRegistry.create(protocol, transportConfig,
                 new SessionTransportListener(currentGeneration), executor);
-            transport = created;
-            logger.info("Bot {} ({}) connecting to {}:{} using protocol {} detected via {}",
-                definition.id(), definition.username(), endpoint.address(), endpoint.port(), activeProtocol,
-                activeProtocolSource);
-            event("CONNECTING", activeProtocol + " via " + activeProtocolSource);
-            created.connect();
+            synchronized (this) {
+                if (!isCurrent(currentGeneration) || manualStop.get()
+                    || maintenanceBlocked.getAsBoolean()) {
+                    settleCancelledConnection();
+                }
+                else {
+                    transport = created;
+                    created.connect();
+                    logger.info("Bot {} ({}) connecting to {}:{} using protocol {} detected via {}",
+                        definition.id(), definition.username(), endpoint.address(), endpoint.port(), activeProtocol,
+                        activeProtocolSource);
+                    event("CONNECTING", activeProtocol + " via " + activeProtocolSource);
+                    return;
+                }
+            }
+            closeCancelledTransport(created);
         }
         catch (Exception exception) {
+            if (created != null) {
+                synchronized (this) {
+                    if (transport == created) {
+                        transport = null;
+                    }
+                }
+                closeCancelledTransport(created);
+            }
+            if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+                settleCancelledConnection();
+                return;
+            }
             lastDisconnectReason = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
             logger.warn("Bot {} could not start its connection: {}", definition.id(), lastDisconnectReason, exception);
             scheduleReconnect(currentGeneration);
+        }
+    }
+
+    private void closeCancelledTransport(BotTransport cancelled) {
+        try {
+            cancelled.disconnect("Bot start cancelled");
+        }
+        catch (RuntimeException exception) {
+            logger.debug("Bot {} could not close a cancelled transport", definition.id(), exception);
+        }
+    }
+
+    private void settleCancelledConnection() {
+        if (manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+            state.set(BotState.STOPPED);
         }
     }
 
@@ -1058,7 +1146,7 @@ public final class BotSession implements BehaviorTarget {
     }
 
     private void sendWhenPlayable(long currentGeneration, String command, int attempt) {
-        if (!isCurrent(currentGeneration) || manualStop.get()) {
+        if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
             return;
         }
         if (sendCommand(command)) {
@@ -1101,7 +1189,7 @@ public final class BotSession implements BehaviorTarget {
         if (authenticationOutcome.failed()) {
             state.set(BotState.FAILED);
         }
-        else if (manualStop.get()) {
+        else if (manualStop.get() || maintenanceBlocked.getAsBoolean()) {
             state.set(BotState.STOPPED);
         }
         else {
@@ -1110,7 +1198,7 @@ public final class BotSession implements BehaviorTarget {
     }
 
     private synchronized void scheduleReconnect(long currentGeneration) {
-        if (!isCurrent(currentGeneration) || manualStop.get()) {
+        if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
             return;
         }
         if (reconnectTask != null && !reconnectTask.isDone()) {
@@ -1132,11 +1220,13 @@ public final class BotSession implements BehaviorTarget {
         else {
             logger.info("Bot {} reconnect attempt {} in {} ms", definition.id(), attempt, delay);
         }
+        nextConnectionAttempt = new ConnectionAttemptSnapshot(
+            Instant.now().plusMillis(delay), ActivationKind.RECONNECT);
         reconnectTask = executor.schedule(this::connectIfNeeded, delay, TimeUnit.MILLISECONDS);
     }
 
-    private synchronized void scheduleConnection(long minimumDelayMillis) {
-        if (manualStop.get()) {
+    private synchronized void scheduleConnection(long minimumDelayMillis, ActivationKind kind) {
+        if (manualStop.get() || maintenanceBlocked.getAsBoolean()) {
             return;
         }
         BotTransport active = transport;
@@ -1150,6 +1240,7 @@ public final class BotSession implements BehaviorTarget {
         if (delay > 0) {
             state.set(BotState.RECONNECT_WAIT);
         }
+        nextConnectionAttempt = new ConnectionAttemptSnapshot(Instant.now().plusMillis(delay), kind);
         reconnectTask = executor.schedule(this::connectIfNeeded, delay, TimeUnit.MILLISECONDS);
     }
 
@@ -1158,6 +1249,7 @@ public final class BotSession implements BehaviorTarget {
             reconnectTask.cancel(false);
             reconnectTask = null;
         }
+        nextConnectionAttempt = null;
     }
 
     private synchronized void cancelServerSwitch() {

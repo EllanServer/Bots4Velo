@@ -21,6 +21,7 @@ import dev.nulli0n.vbot.bot.BotManager;
 import dev.nulli0n.vbot.bot.BotSession;
 import dev.nulli0n.vbot.bot.BotSnapshot;
 import dev.nulli0n.vbot.bot.BotEvent;
+import dev.nulli0n.vbot.bot.MaintenanceHoldSnapshot;
 import dev.nulli0n.vbot.api.Bots4VeloApi;
 import dev.nulli0n.vbot.api.Bots4VeloApiProvider;
 import dev.nulli0n.vbot.backend.BackendControlPatch;
@@ -31,6 +32,7 @@ import dev.nulli0n.vbot.backend.protocol.BackendChannel;
 import dev.nulli0n.vbot.command.VBotCommand;
 import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
+import dev.nulli0n.vbot.config.ConfigChangePreview;
 import dev.nulli0n.vbot.config.ManagedBotStore;
 import dev.nulli0n.vbot.message.PluginMessages;
 import dev.nulli0n.vbot.observe.PrometheusExporter;
@@ -45,11 +47,14 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 @Plugin(
@@ -76,8 +81,12 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private volatile PrometheusExporter prometheusExporter;
     private volatile TabIntegration tabIntegration;
     private volatile ScheduledTask tabTask;
+    private volatile ScheduledTask reloadHandoffTask;
+    private volatile Set<String> reloadHandoffUsernames = Set.of();
+    private final RuntimeGenerationGate runtimeGeneration = new RuntimeGenerationGate();
     private volatile VelocityBackendControlService backendControlClient;
     private volatile boolean backendControlChannelRegistered;
+    private volatile boolean shuttingDown;
     private final BackendControlService backendControl = new BackendControlService() {
         @Override
         public CompletionStage<BackendControlResult> probe(String botId) {
@@ -108,7 +117,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     @Subscribe
-    public void onInitialize(ProxyInitializeEvent event) {
+    public synchronized void onInitialize(ProxyInitializeEvent event) {
         try {
             messages = PluginMessages.load(dataDirectory, logger);
             managedBotStore = ManagedBotStore.load(dataDirectory);
@@ -120,27 +129,27 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             backendControlClient.start();
             registerOptionalIntegrations(manager, config);
             registerCommand();
+            long generation = runtimeGeneration.advance();
             manager.startEnabled();
-            startConfiguredFollows(config);
-            startConfiguredSchedules(config);
-            startPresenceRules(config);
+            startConfiguredFollows(config, generation, manager);
+            startConfiguredSchedules(config, generation, manager);
+            startPresenceRules(config, generation, manager);
             startPrometheus(manager, config);
-            startTabIntegration(manager);
+            startTabIntegration(manager, generation);
             Bots4VeloApiProvider.register(this);
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
-            stopPrometheus();
-            stopTabIntegration();
+            cancelRuntimeServicesForReload();
             VelocityBackendControlService control = backendControlClient;
             backendControlClient = null;
             if (control != null) {
-                control.close();
+                bestEffort("backend control", control::close);
             }
             BotManager active = manager;
             manager = null;
             if (active != null) {
-                active.close();
+                bestEffort("bot manager", active::close);
             }
             unregisterBackendControlChannel();
             logger.error("bots4velo initialization failed", exception);
@@ -166,70 +175,206 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         try {
             replacement = new BotManager(replacementConfig, logger,
                 new VelocityBackendProtocolDetector(proxy));
+            replacement.pauseActivations();
             replacementBackend = createBackendControl(replacementConfig, replacement);
             registerOptionalIntegrations(replacement, replacementConfig);
         }
         catch (RuntimeException exception) {
-            if (replacementBackend != null) {
-                replacementBackend.close();
+            VelocityBackendControlService failedBackend = replacementBackend;
+            BotManager failedReplacement = replacement;
+            if (failedBackend != null) {
+                bestEffort("replacement backend control", failedBackend::close);
             }
-            if (replacement != null) {
-                replacement.close();
+            if (failedReplacement != null) {
+                bestEffort("replacement bot manager", failedReplacement::close);
             }
             throw exception;
         }
 
         BotManager previous = manager;
         VelocityBackendControlService previousBackend = backendControlClient;
-        BotPluginConfig previousConfig = config;
-        ManagedBotStore previousStore = managedBotStore;
-        PluginMessages previousMessages = messages;
+        List<MaintenanceHoldSnapshot> previousHolds = previous == null
+            ? List.of() : previous.holdSnapshots();
+        List<String> currentPreviousUsernames = previous == null ? List.of() : previous.sessions().stream()
+            .map(session -> session.definition().username()).toList();
+        Set<String> previousUsernames = ReloadHandoffGate.mergePendingUsernames(
+            reloadHandoffUsernames, currentPreviousUsernames);
         try {
             replacementBackend.start();
-            managedBotStore = replacementStore;
-            messages = replacementMessages;
-            config = replacementConfig;
-            manager = replacement;
-            backendControlClient = replacementBackend;
-            replacement.startEnabled();
+            restoreMaintenanceHolds(replacement, previousHolds);
         }
         catch (RuntimeException exception) {
-            backendControlClient = previousBackend;
-            manager = previous;
-            config = previousConfig;
-            managedBotStore = previousStore;
-            messages = previousMessages;
-            replacementBackend.close();
-            replacement.close();
+            VelocityBackendControlService failedBackend = replacementBackend;
+            BotManager failedReplacement = replacement;
+            bestEffort("replacement backend control", failedBackend::close);
+            bestEffort("replacement bot manager", failedReplacement::close);
             throw exception;
         }
 
+        long replacementRuntimeGeneration = cancelRuntimeServicesForReload();
+        // Commit the validated replacement before shutting down old state. Its
+        // activation gate remains closed until Velocity has removed every old
+        // bot Player, including asynchronous legacy transport disconnects.
+        managedBotStore = replacementStore;
+        messages = replacementMessages;
+        config = replacementConfig;
+        manager = replacement;
+        backendControlClient = replacementBackend;
         if (previousBackend != null) {
-            previousBackend.close();
+            bestEffort("previous backend control", previousBackend::close);
         }
         if (previous != null) {
-            previous.close();
+            bestEffort("previous bot manager", previous::close);
         }
+        beginReloadHandoff(replacement, replacementConfig, previousUsernames,
+            replacementRuntimeGeneration);
+        return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
+    }
+
+    /** Parses the complete replacement configuration without mutating live state. */
+    public synchronized ReloadCheckResult previewReload() throws IOException {
+        PluginMessages candidateMessages = PluginMessages.loadStrict(dataDirectory, logger);
+        ManagedBotStore candidateStore = ManagedBotStore.load(dataDirectory);
+        BotPluginConfig candidateConfig = ConfigLoader.load(dataDirectory, candidateStore.definitions());
+        ConfigChangePreview.Preview preview = ConfigChangePreview.compare(config, candidateConfig);
+        return new ReloadCheckResult(preview, messages.language(), candidateMessages.language(),
+            candidateConfig.bots().size(), candidateStore.definitions().size());
+    }
+
+    /** Serializes an operator hold with manager replacement during reload. */
+    public synchronized boolean holdBot(String id, String reason) {
+        return manager().hold(id, reason);
+    }
+
+    /** Serializes a timed operator hold with manager replacement during reload. */
+    public synchronized boolean holdBot(String id, String reason, Duration ttl) {
+        return manager().hold(id, reason, ttl);
+    }
+
+    public synchronized boolean holdBot(String id, String reason, String server) {
+        return manager().hold(id, reason, server);
+    }
+
+    public synchronized boolean holdBot(String id, String reason, Duration ttl, String server) {
+        return manager().hold(id, reason, ttl, server);
+    }
+
+    /** Serializes hold removal with manager replacement during reload. */
+    public synchronized boolean resumeBot(String id) {
+        return manager().resume(id);
+    }
+
+    private static void restoreMaintenanceHolds(BotManager replacement,
+                                                List<MaintenanceHoldSnapshot> holds) {
+        for (MaintenanceHoldSnapshot hold : holds) {
+            replacement.restoreHold(hold);
+        }
+    }
+
+    private long cancelRuntimeServicesForReload() {
+        long replacementGeneration = runtimeGeneration.advance();
+        cancelReloadHandoff();
+        cancelTasks(followTasks, "follow");
+        cancelTasks(scheduledActions, "scheduled action");
+        cancelTasks(presenceTasks, "presence rule");
+        bestEffort("Prometheus exporter", this::stopPrometheus);
+        bestEffort("TAB integration", this::stopTabIntegration);
+        return replacementGeneration;
+    }
+
+    private void beginReloadHandoff(BotManager replacement, BotPluginConfig replacementConfig,
+                                    Set<String> previousUsernames, long expectedRuntimeGeneration) {
+        reloadHandoffUsernames = Set.copyOf(previousUsernames);
+        AtomicInteger waitingPolls = new AtomicInteger();
+        ReloadHandoffGate gate = new ReloadHandoffGate(
+            () -> !shuttingDown && manager == replacement,
+            () -> previousUsernames.stream().noneMatch(username -> proxy.getPlayer(username).isPresent()),
+            () -> startReplacementRuntime(replacement, replacementConfig, expectedRuntimeGeneration));
         try {
-            followTasks.values().forEach(ScheduledTask::cancel);
-            followTasks.clear();
-            startConfiguredFollows(replacementConfig);
-            scheduledActions.values().forEach(ScheduledTask::cancel);
-            scheduledActions.clear();
-            startConfiguredSchedules(replacementConfig);
-            presenceTasks.values().forEach(ScheduledTask::cancel);
-            presenceTasks.clear();
-            startPresenceRules(replacementConfig);
-            stopPrometheus();
+            if (gate.poll() != ReloadHandoffGate.PollResult.WAITING) {
+                return;
+            }
+
+            logger.info("Reload handoff is waiting for {} old bot player(s) to leave Velocity",
+                previousUsernames.stream().filter(username -> proxy.getPlayer(username).isPresent()).count());
+            AtomicReference<ScheduledTask> scheduled = new AtomicReference<>();
+            ScheduledTask task = proxy.getScheduler().buildTask(this, () -> {
+                ReloadHandoffGate.PollResult result = gate.poll();
+                if (result == ReloadHandoffGate.PollResult.WAITING) {
+                    if (waitingPolls.incrementAndGet() % 100 == 0) {
+                        List<String> lingering = previousUsernames.stream()
+                            .filter(username -> proxy.getPlayer(username).isPresent())
+                            .limit(10)
+                            .toList();
+                        logger.warn("Reload handoff is still waiting for old Velocity player(s): {}", lingering);
+                    }
+                    return;
+                }
+                ScheduledTask completed = scheduled.get();
+                if (completed != null) {
+                    bestEffort("reload handoff task", completed::cancel);
+                    if (reloadHandoffTask == completed) {
+                        reloadHandoffTask = null;
+                    }
+                }
+            }).delay(Duration.ofMillis(100)).repeat(Duration.ofMillis(100)).schedule();
+            scheduled.set(task);
+            reloadHandoffTask = task;
+        }
+        catch (RuntimeException exception) {
+            logger.error("Could not complete or schedule the safe reload player handoff; replacement activations "
+                + "remain paused. Run /vbot reload again after checking Velocity player and scheduler state.",
+                exception);
+        }
+    }
+
+    private synchronized void startReplacementRuntime(BotManager replacement,
+                                                       BotPluginConfig replacementConfig,
+                                                       long expectedRuntimeGeneration) {
+        if (!runtimeCurrent(expectedRuntimeGeneration, replacement)) {
+            return;
+        }
+        reloadHandoffUsernames = Set.of();
+        replacement.resumeActivations();
+        replacement.startEnabled();
+        logger.info("Reload handoff complete; replacement bot activations are enabled");
+        try {
+            startConfiguredFollows(replacementConfig, expectedRuntimeGeneration, replacement);
+            startConfiguredSchedules(replacementConfig, expectedRuntimeGeneration, replacement);
+            startPresenceRules(replacementConfig, expectedRuntimeGeneration, replacement);
             startPrometheus(replacement, replacementConfig);
-            stopTabIntegration();
-            startTabIntegration(replacement);
+            startTabIntegration(replacement, expectedRuntimeGeneration);
         }
         catch (RuntimeException exception) {
             logger.error("Bots4Velo reloaded bots successfully, but an optional integration failed to restart",
                 exception);
         }
-        return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
+    }
+
+    private void cancelReloadHandoff() {
+        ScheduledTask task = reloadHandoffTask;
+        reloadHandoffTask = null;
+        if (task != null) {
+            bestEffort("reload handoff task", task::cancel);
+        }
+    }
+
+    private <K> void cancelTasks(ConcurrentMap<K, ScheduledTask> tasks, String label) {
+        tasks.forEach((ignored, task) -> bestEffort(label + " task", task::cancel));
+        tasks.clear();
+    }
+
+    private void bestEffort(String resource, Runnable action) {
+        try {
+            action.run();
+        }
+        catch (RuntimeException | LinkageError exception) {
+            logger.warn("Could not close or cancel {} during lifecycle transition", resource, exception);
+        }
+    }
+
+    private boolean runtimeCurrent(long expectedGeneration, BotManager expectedManager) {
+        return !shuttingDown && runtimeGeneration.matches(expectedGeneration) && manager == expectedManager;
     }
 
     public BotPluginConfig validateConfiguration() throws IOException {
@@ -282,25 +427,20 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     @Subscribe
-    public void onShutdown(ProxyShutdownEvent event) {
+    public synchronized void onShutdown(ProxyShutdownEvent event) {
+        shuttingDown = true;
+        reloadHandoffUsernames = Set.of();
         Bots4VeloApiProvider.clear(this);
-        followTasks.values().forEach(ScheduledTask::cancel);
-        followTasks.clear();
-        scheduledActions.values().forEach(ScheduledTask::cancel);
-        scheduledActions.clear();
-        presenceTasks.values().forEach(ScheduledTask::cancel);
-        presenceTasks.clear();
-        stopPrometheus();
-        stopTabIntegration();
+        cancelRuntimeServicesForReload();
         VelocityBackendControlService control = backendControlClient;
         backendControlClient = null;
         if (control != null) {
-            control.close();
+            bestEffort("backend control", control::close);
         }
         unregisterBackendControlChannel();
         BotManager active = manager;
         if (active != null) {
-            active.close();
+            bestEffort("bot manager", active::close);
         }
     }
 
@@ -421,7 +561,11 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     public List<BotSession> selectBots(String selector) {
-        List<BotSession> candidates = manager().select(selector);
+        return selectBots(manager(), selector);
+    }
+
+    private List<BotSession> selectBots(BotManager owningManager, String selector) {
+        List<BotSession> candidates = owningManager.select(selector);
         String normalized = selector == null ? "" : selector.trim();
         if (!normalized.regionMatches(true, 0, "@server:", 0, "@server:".length())) {
             return candidates;
@@ -430,19 +574,29 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         if (server.isBlank()) {
             return List.of();
         }
-        return candidates.stream().filter(session -> currentServer(session.definition().id())
+        return candidates.stream().filter(session -> currentServer(owningManager, session.definition().id())
             .map(current -> current.equalsIgnoreCase(server)).orElse(false)).toList();
     }
 
     public Optional<String> currentServer(String botId) {
-        return manager().find(botId)
+        return currentServer(manager(), botId);
+    }
+
+    private Optional<String> currentServer(BotManager owningManager, String botId) {
+        return owningManager.find(botId)
             .flatMap(session -> proxy.getPlayer(session.definition().username()))
             .flatMap(Player::getCurrentServer)
             .map(connection -> connection.getServerInfo().getName());
     }
 
     public CompletableFuture<BotServerSwitchResult> switchBotServer(String botId, String serverName) {
-        Optional<BotSession> found = manager().find(botId);
+        return switchBotServer(manager(), botId, serverName);
+    }
+
+    private CompletableFuture<BotServerSwitchResult> switchBotServer(BotManager owningManager,
+                                                                      String botId,
+                                                                      String serverName) {
+        Optional<BotSession> found = owningManager.find(botId);
         if (found.isEmpty()) {
             return CompletableFuture.completedFuture(new BotServerSwitchResult(
                 BotServerSwitchStatus.BOT_NOT_FOUND, botId, "", serverName, "unknown bot"));
@@ -509,8 +663,17 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         });
     }
 
-    public FollowResult startFollowing(String botId, String playerName) {
-        Optional<BotSession> found = manager().find(botId);
+    public synchronized FollowResult startFollowing(String botId, String playerName) {
+        BotManager expectedManager = manager();
+        return startFollowing(botId, playerName, runtimeGeneration.current(), expectedManager);
+    }
+
+    private FollowResult startFollowing(String botId, String playerName, long expectedGeneration,
+                                        BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return new FollowResult(false, "runtime is changing");
+        }
+        Optional<BotSession> found = expectedManager.find(botId);
         if (found.isEmpty()) {
             return new FollowResult(false, "unknown bot");
         }
@@ -520,14 +683,15 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         }
         stopFollowing(botId);
         found.get().setFollowTarget(target);
-        ScheduledTask task = proxy.getScheduler().buildTask(this, () -> followTick(found.get().definition().id(), target))
+        ScheduledTask task = proxy.getScheduler().buildTask(this, () -> followTick(
+            found.get().definition().id(), target, expectedGeneration, expectedManager))
             .repeat(Duration.ofSeconds(3)).schedule();
         followTasks.put(found.get().definition().id().toLowerCase(java.util.Locale.ROOT), task);
-        followTick(found.get().definition().id(), target);
+        followTick(found.get().definition().id(), target, expectedGeneration, expectedManager);
         return new FollowResult(true, "following " + target);
     }
 
-    public boolean stopFollowing(String botId) {
+    public synchronized boolean stopFollowing(String botId) {
         Optional<BotSession> found = manager().find(botId);
         found.ifPresent(session -> session.setFollowTarget(""));
         ScheduledTask task = followTasks.remove(botId == null ? "" : botId.trim().toLowerCase(java.util.Locale.ROOT));
@@ -537,8 +701,12 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         return found.isPresent();
     }
 
-    private void followTick(String botId, String playerName) {
-        Optional<BotSession> session = manager().find(botId);
+    private void followTick(String botId, String playerName, long expectedGeneration,
+                            BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return;
+        }
+        Optional<BotSession> session = expectedManager.find(botId);
         Optional<Player> target = proxy.getPlayer(playerName);
         if (session.isEmpty() || target.isEmpty() || !session.get().isPlayable()
             || !session.get().isAuthenticationComplete()) {
@@ -548,12 +716,15 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         if (server.isEmpty()) {
             return;
         }
-        currentServer(botId).filter(current -> current.equalsIgnoreCase(server.get())).ifPresentOrElse(current ->
+        currentServer(expectedManager, botId).filter(current -> current.equalsIgnoreCase(server.get()))
+            .ifPresentOrElse(current ->
             target.get().spoofChatInput("/minecraft:tp " + session.get().definition().username() + " "
-                + target.get().getUsername()), () -> switchBotServer(botId, server.get()).thenAccept(result -> {
-                if (result.successful()) {
+                + target.get().getUsername()), () -> switchBotServer(expectedManager, botId, server.get())
+                .thenAccept(result -> {
+                if (runtimeCurrent(expectedGeneration, expectedManager) && result.successful()) {
                     proxy.getScheduler().buildTask(this, () -> {
-                        if (target.get().getCurrentServer().map(connection -> connection.getServerInfo().getName()
+                        if (runtimeCurrent(expectedGeneration, expectedManager)
+                            && target.get().getCurrentServer().map(connection -> connection.getServerInfo().getName()
                             .equalsIgnoreCase(result.server())).orElse(false)) {
                             target.get().spoofChatInput("/minecraft:tp " + result.username() + " "
                                 + target.get().getUsername());
@@ -563,22 +734,29 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             }));
     }
 
-    private void startConfiguredFollows(BotPluginConfig candidate) {
+    private void startConfiguredFollows(BotPluginConfig candidate, long expectedGeneration,
+                                        BotManager expectedManager) {
         candidate.bots().values().stream()
             .filter(definition -> definition.enabled()
                 && definition.behavior().mode() == BotPluginConfig.BehaviorMode.FOLLOW
                 && !definition.behavior().followPlayer().isBlank())
-            .forEach(definition -> startFollowing(definition.id(), definition.behavior().followPlayer()));
+            .forEach(definition -> startFollowing(definition.id(), definition.behavior().followPlayer(),
+                expectedGeneration, expectedManager));
     }
 
-    private void startConfiguredSchedules(BotPluginConfig candidate) {
+    private void startConfiguredSchedules(BotPluginConfig candidate, long expectedGeneration,
+                                          BotManager expectedManager) {
         for (BotPluginConfig.ScheduledAction action : candidate.runtime().schedules()) {
+            if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+                return;
+            }
             if (action.runsDailyAtConfiguredTime()) {
-                scheduleNextDailyAction(action);
+                scheduleNextDailyAction(action, expectedGeneration, expectedManager);
                 continue;
             }
             ScheduleTiming timing = scheduleTiming(action);
-            ScheduledTask task = proxy.getScheduler().buildTask(this, () -> runScheduledAction(action))
+            ScheduledTask task = proxy.getScheduler().buildTask(this,
+                () -> runScheduledAction(action, expectedGeneration, expectedManager))
                 .delay(timing.initialDelay())
                 .repeat(timing.interval()).schedule();
             scheduledActions.put(action.id().toLowerCase(java.util.Locale.ROOT), task);
@@ -590,29 +768,45 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             Duration.ofMillis(action.intervalMillis()));
     }
 
-    private void scheduleNextDailyAction(BotPluginConfig.ScheduledAction action) {
+    private synchronized void scheduleNextDailyAction(BotPluginConfig.ScheduledAction action,
+                                                      long expectedGeneration,
+                                                      BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return;
+        }
         Duration delay = DailySchedule.delayUntilNext(action.at(), action.timezone(), Instant.now());
         ScheduledTask task = proxy.getScheduler().buildTask(this, () -> {
-            runScheduledAction(action);
+            if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+                return;
+            }
+            runScheduledAction(action, expectedGeneration, expectedManager);
             // Calculate the next local wall-clock occurrence after every run,
             // so a daylight-saving transition does not shift the configured time.
-            scheduleNextDailyAction(action);
+            scheduleNextDailyAction(action, expectedGeneration, expectedManager);
         }).delay(delay).schedule();
         scheduledActions.put(action.id().toLowerCase(java.util.Locale.ROOT), task);
     }
 
-    private void runScheduledAction(BotPluginConfig.ScheduledAction action) {
-        List<BotSession> targets = selectBots(action.selector());
+    private void runScheduledAction(BotPluginConfig.ScheduledAction action, long expectedGeneration,
+                                    BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return;
+        }
+        List<BotSession> targets = selectBots(expectedManager, action.selector());
         if (targets.isEmpty()) {
             logger.debug("Scheduled action {} matched no bots", action.id());
             return;
         }
         for (BotSession session : targets) {
+            if (!runtimeCurrent(expectedGeneration, expectedManager)
+                || expectedManager.isHeld(session.definition().id())) {
+                continue;
+            }
             switch (action.action()) {
-                case "start" -> manager().startAutomatically(session.definition().id());
-                case "stop" -> manager().stop(session.definition().id());
-                case "reconnect" -> manager().reconnectAutomatically(session.definition().id());
-                case "server" -> switchBotServer(session.definition().id(), action.server());
+                case "start" -> expectedManager.startAutomatically(session.definition().id());
+                case "stop" -> expectedManager.stop(session.definition().id());
+                case "reconnect" -> expectedManager.reconnectAutomatically(session.definition().id());
+                case "server" -> switchBotServer(expectedManager, session.definition().id(), action.server());
                 default -> logger.warn("Ignoring unknown scheduled action {}", action.action());
             }
         }
@@ -652,16 +846,23 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         }
     }
 
-    private void startTabIntegration(BotManager candidate) {
+    private void startTabIntegration(BotManager candidate, long expectedGeneration) {
         if (proxy.getPluginManager().getPlugin("tab").isEmpty()) {
             return;
         }
         try {
             TabIntegration integration = new TabIntegration(candidate, logger);
             tabIntegration = integration;
-            tabTask = proxy.getScheduler().buildTask(this, integration::apply)
+            Runnable apply = () -> {
+                synchronized (this) {
+                    if (runtimeCurrent(expectedGeneration, candidate)) {
+                        integration.apply();
+                    }
+                }
+            };
+            tabTask = proxy.getScheduler().buildTask(this, apply)
                 .repeat(Duration.ofSeconds(1)).schedule();
-            integration.apply();
+            apply.run();
             logger.info("TAB integration enabled; use {} in TAB formatting", TabIntegration.GROUP_PLACEHOLDER);
         }
         catch (RuntimeException | LinkageError exception) {
@@ -673,25 +874,34 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         ScheduledTask task = tabTask;
         tabTask = null;
         if (task != null) {
-            task.cancel();
+            bestEffort("TAB refresh task", task::cancel);
         }
         TabIntegration active = tabIntegration;
         tabIntegration = null;
         if (active != null) {
-            active.close();
+            bestEffort("TAB integration", active::close);
         }
     }
 
-    private void startPresenceRules(BotPluginConfig candidate) {
+    private void startPresenceRules(BotPluginConfig candidate, long expectedGeneration,
+                                    BotManager expectedManager) {
         for (BotPluginConfig.PresenceRule rule : candidate.runtime().presenceRules()) {
-            ScheduledTask task = proxy.getScheduler().buildTask(this, () -> applyPresenceRule(rule))
+            if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+                return;
+            }
+            ScheduledTask task = proxy.getScheduler().buildTask(this,
+                () -> applyPresenceRule(rule, expectedGeneration, expectedManager))
                 .repeat(Duration.ofMillis(rule.intervalMillis())).schedule();
             presenceTasks.put(rule.id().toLowerCase(java.util.Locale.ROOT), task);
-            applyPresenceRule(rule);
+            applyPresenceRule(rule, expectedGeneration, expectedManager);
         }
     }
 
-    private void applyPresenceRule(BotPluginConfig.PresenceRule rule) {
+    private void applyPresenceRule(BotPluginConfig.PresenceRule rule, long expectedGeneration,
+                                   BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return;
+        }
         Optional<RegisteredServer> backend = findServer(rule.server());
         if (backend.isEmpty()) {
             logger.warn("Presence rule {} refers to unknown server {}", rule.id(), rule.server());
@@ -702,29 +912,41 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         // failed connection. The next scheduled tick resumes assignments, and
         // BotManager's shared connection limiter batches their re-entry.
         backend.get().ping().whenComplete((ignored, failure) -> {
+            if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+                return;
+            }
             if (failure != null) {
                 logger.debug("Presence rule {} is waiting for backend {} to recover", rule.id(), rule.server());
                 return;
             }
-            applyPresenceRuleToHealthyBackend(rule, backend.get());
+            applyPresenceRuleToHealthyBackend(rule, backend.get(), expectedGeneration, expectedManager);
         });
     }
 
-    private void applyPresenceRuleToHealthyBackend(BotPluginConfig.PresenceRule rule, RegisteredServer backend) {
-        java.util.Set<String> botNames = manager().snapshots().stream()
+    private void applyPresenceRuleToHealthyBackend(BotPluginConfig.PresenceRule rule, RegisteredServer backend,
+                                                   long expectedGeneration, BotManager expectedManager) {
+        if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+            return;
+        }
+        java.util.Set<String> botNames = expectedManager.snapshots().stream()
             .map(snapshot -> snapshot.username().toLowerCase(java.util.Locale.ROOT)).collect(java.util.stream.Collectors.toSet());
         long humans = backend.getPlayersConnected().stream()
             .filter(player -> !botNames.contains(player.getUsername().toLowerCase(java.util.Locale.ROOT))).count();
         int desired = humans <= rule.maximumHumans() ? rule.minimumBots() : 0;
-        List<BotSession> candidates = selectBots(rule.selector());
+        List<BotSession> candidates = selectBots(expectedManager, rule.selector()).stream()
+            .filter(session -> !expectedManager.isHeld(session.definition().id()))
+            .toList();
         for (int index = 0; index < candidates.size(); index++) {
+            if (!runtimeCurrent(expectedGeneration, expectedManager)) {
+                return;
+            }
             BotSession session = candidates.get(index);
             if (index < desired) {
-                manager().startAutomatically(session.definition().id());
-                switchBotServer(session.definition().id(), backend.getServerInfo().getName());
+                expectedManager.startAutomatically(session.definition().id());
+                switchBotServer(expectedManager, session.definition().id(), backend.getServerInfo().getName());
             }
             else {
-                manager().stop(session.definition().id());
+                expectedManager.stop(session.definition().id());
             }
         }
     }
@@ -773,6 +995,15 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     }
 
     public record ReloadResult(int configuredBots, int managedBots) {
+    }
+
+    public record ReloadCheckResult(
+        ConfigChangePreview.Preview preview,
+        String currentLanguage,
+        String candidateLanguage,
+        int configuredBots,
+        int managedBots
+    ) {
     }
 
     private record ScheduleTiming(Duration initialDelay, Duration interval) {

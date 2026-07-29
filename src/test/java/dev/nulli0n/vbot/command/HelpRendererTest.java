@@ -33,17 +33,18 @@ class HelpRendererTest {
     Path temporaryDirectory;
 
     @Test
-    void catalogHasFourPagesWithoutDuplicateCommands() {
+    void catalogHasFivePagesWithoutDuplicateCommands() {
         List<HelpRenderer.HelpEntry> entries = allEntries();
 
-        assertThat(HelpRenderer.PAGE_COUNT).isEqualTo(4);
-        assertThat(HelpRenderer.entries(1)).hasSize(8);
+        assertThat(HelpRenderer.PAGE_COUNT).isEqualTo(5);
+        assertThat(HelpRenderer.entries(1)).hasSize(6);
         assertThat(HelpRenderer.entries(2)).hasSize(7);
         assertThat(HelpRenderer.entries(3)).hasSize(5);
-        assertThat(HelpRenderer.entries(4)).hasSize(7);
+        assertThat(HelpRenderer.entries(4)).hasSize(5);
+        assertThat(HelpRenderer.entries(5)).hasSize(7);
         assertThat(HelpRenderer.entries(0)).isEmpty();
-        assertThat(HelpRenderer.entries(5)).isEmpty();
-        assertThat(entries).hasSize(27);
+        assertThat(HelpRenderer.entries(6)).isEmpty();
+        assertThat(entries).hasSize(30);
         assertThat(entries).extracting(HelpRenderer.HelpEntry::syntax).doesNotHaveDuplicates();
         assertThat(entries).extracting(HelpRenderer.HelpEntry::descriptionKey).doesNotHaveDuplicates();
         assertThat(entries).allSatisfy(entry ->
@@ -140,11 +141,11 @@ class HelpRendererTest {
             assertThat(buttons).isNotEmpty();
             assertThat(buttons).allSatisfy(button -> {
                 assertThat(button.clickEvent().action()).isEqualTo(ClickEvent.Action.RUN_COMMAND);
-                assertThat(button.clickEvent().value()).matches("/vbot help [1-4]");
+                assertThat(button.clickEvent().value()).matches("/vbot help [1-5]");
                 assertThat(button.clickEvent().value()).isNotEqualTo("/vbot help " + currentPage);
                 assertThat(button.hoverEvent()).isNotNull();
                 assertThat(button.hoverEvent().action()).isEqualTo(HoverEvent.Action.SHOW_TEXT);
-                assertThat(hoverText(button)).matches("Open test page [1-4]");
+                assertThat(hoverText(button)).matches("Open test page [1-5]");
             });
         }
     }
@@ -169,7 +170,7 @@ class HelpRendererTest {
             .contains("English test overview")
             .contains("English list description")
             .contains("English selector hint");
-        assertThat(hoverText(findClickTarget(englishPage, "/vbot list")))
+        assertThat(hoverText(findClickTarget(englishPage, "/vbot list ")))
             .contains("Insert this command: /vbot list")
             .contains("Requires bots4velo.view");
 
@@ -179,7 +180,7 @@ class HelpRendererTest {
             .contains("中文测试概览")
             .contains("中文列表说明")
             .contains("中文选择器提示");
-        assertThat(hoverText(findClickTarget(chinesePage, "/vbot list")))
+        assertThat(hoverText(findClickTarget(chinesePage, "/vbot list ")))
             .contains("填入命令：/vbot list")
             .contains("所需权限：bots4velo.view");
     }
@@ -198,21 +199,21 @@ class HelpRendererTest {
         Files.writeString(directory.resolve("messages.yml"), """
             language: __LANGUAGE__
             en_US:
-              help-section-1: "English test overview"
+              help-section-v29-1: "English test overview"
               help-empty: "No commands on this test page."
               help-selectors: "English selector hint"
               help-click-command: "Insert this command: %s"
               help-permission: "Requires %s"
               help-open-page: "Open test page %s"
-              help-list: "English list description"
+              help-list-v29: "English list description"
             zh_CN:
-              help-section-1: "中文测试概览"
+              help-section-v29-1: "中文测试概览"
               help-empty: "此测试页面没有命令。"
               help-selectors: "中文选择器提示"
               help-click-command: "填入命令：%s"
               help-permission: "所需权限：%s"
               help-open-page: "打开测试页面 %s"
-              help-list: "中文列表说明"
+              help-list-v29: "中文列表说明"
             """.replace("__LANGUAGE__", language), StandardCharsets.UTF_8);
         return PluginMessages.load(directory, LOGGER);
     }

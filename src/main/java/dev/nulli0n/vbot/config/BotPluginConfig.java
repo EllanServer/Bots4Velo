@@ -172,7 +172,8 @@ public record BotPluginConfig(
         ProtocolSelection protocolOverride,
         String templateName,
         BehaviorConfig behavior,
-        PlayerStateConfig playerState
+        PlayerStateConfig playerState,
+        String credentialSourceFingerprint
     ) {
         public BotDefinition {
             afterLoginCommands = List.copyOf(afterLoginCommands);
@@ -183,6 +184,39 @@ public record BotPluginConfig(
             templateName = templateName == null ? "" : templateName;
             behavior = behavior == null ? BehaviorConfig.disabled() : behavior;
             playerState = playerState == null ? PlayerStateConfig.unchanged() : playerState;
+            credentialSourceFingerprint = credentialSourceFingerprint == null
+                || credentialSourceFingerprint.isBlank()
+                ? (password == null || password.isBlank() ? "none" : "inline")
+                : credentialSourceFingerprint;
+        }
+
+        /** Source-compatible constructor for the complete 2.8 bot model. */
+        public BotDefinition(
+            String id,
+            boolean enabled,
+            String username,
+            String password,
+            String targetServer,
+            String protocolDetectionServer,
+            int renderDistance,
+            AuthConfig auth,
+            String serverSwitchCommand,
+            long serverSwitchDelayMillis,
+            int serverSwitchMaximumAttempts,
+            List<String> afterLoginCommands,
+            List<String> groups,
+            List<String> tags,
+            String displayName,
+            String tabGroup,
+            ProtocolSelection protocolOverride,
+            String templateName,
+            BehaviorConfig behavior,
+            PlayerStateConfig playerState
+        ) {
+            this(id, enabled, username, password, targetServer, protocolDetectionServer, renderDistance, auth,
+                serverSwitchCommand, serverSwitchDelayMillis, serverSwitchMaximumAttempts, afterLoginCommands,
+                groups, tags, displayName, tabGroup, protocolOverride, templateName, behavior, playerState,
+                password == null || password.isBlank() ? "none" : "inline");
         }
 
         /** Source-compatible constructor for the complete 2.4 bot model. */

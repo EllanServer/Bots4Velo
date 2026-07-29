@@ -6,37 +6,43 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class VBotCommandTest {
     @Test
-    void helpCatalogMatchesTheFourPublishedPages() {
+    void helpCatalogMatchesTheFivePublishedPages() {
         assertThat(VBotCommand.helpLines(1))
             .containsExactly(
-                "/vbot list - List bots, states, servers and labels",
+                "/vbot list [selector] [filters] - Filter and page bots, states, servers and labels",
                 "/vbot status <id> - Show detailed bot status",
                 "/vbot history <id> - Show recent bot events",
                 "/vbot doctor [selector] - Diagnose configuration and connectivity",
                 "/vbot monitor [id] - Output monitoring JSON",
-                "/vbot servers - List Velocity backends",
-                "/vbot server <selector> <server> - Switch bots to a backend",
-                "/vbot movehere <selector> - Bring bots to your server"
+                "/vbot queue [selector] [--page n] - Show pending starts and reconnects"
             );
         assertThat(VBotCommand.helpLines(2))
             .containsExactly(
+                "/vbot servers - List Velocity backends",
+                "/vbot server <selector> <server> - Switch bots to a backend",
+                "/vbot movehere <selector> - Bring bots to your server",
                 "/vbot start|stop|reconnect <selector> - Control connections",
                 "/vbot command <selector> <command> - Run a command as bots",
+                "/vbot hold <selector> [--ttl 30m] [reason] - Stop and maintenance-lock bots",
+                "/vbot resume <selector> - Remove a maintenance lock"
+            );
+        assertThat(VBotCommand.helpLines(3))
+            .containsExactly(
                 "/vbot behavior <selector> <action> - Start, pause or inspect behavior",
                 "/vbot behavior <selector> follow <player> - Follow or unfollow a player",
                 "/vbot position <id> - Show the protocol position",
                 "/vbot move <id> <x> <y> <z> - Move a bot",
                 "/vbot look <id> <yaw> <pitch> - Rotate a bot"
             );
-        assertThat(VBotCommand.helpLines(3))
+        assertThat(VBotCommand.helpLines(4))
             .containsExactly(
                 "/vbot create <id> <name> ... - Create a persistent bot",
                 "/vbot remove <id> - Remove a managed bot",
-                "/vbot reload - Validate and reload configuration",
+                "/vbot reload [--check] - Preview or safely reload configuration",
                 "/vbot language - Show the current UI language",
                 "/vbot language <locale> - Switch the global UI language"
             );
-        assertThat(VBotCommand.helpLines(4))
+        assertThat(VBotCommand.helpLines(5))
             .containsExactly(
                 "/vbot afk <selector> status - Inspect the actual AFK policy",
                 "/vbot afk <selector> <preset|set|unmanage> - Apply or stop managing an AFK policy",
@@ -46,7 +52,7 @@ class VBotCommandTest {
                 "/vbot spawnpoint <selector> <mode> - Manage the respawn point",
                 "/vbot respawn <selector> - Request a backend respawn"
             );
-        assertThat(VBotCommand.helpLines(5)).isEmpty();
+        assertThat(VBotCommand.helpLines(6)).isEmpty();
     }
 
     @Test
@@ -61,6 +67,16 @@ class VBotCommandTest {
             .isEqualTo("bots4velo.view");
         assertThat(VBotCommand.permissionFor("afk", new String[]{"afk", "all", "preset", "safe"}))
             .isEqualTo("bots4velo.control");
+    }
+
+    @Test
+    void operationsViewsAndMaintenanceCommandsUseSplitPermissions() {
+        assertThat(VBotCommand.permissionFor("list")).isEqualTo("bots4velo.view");
+        assertThat(VBotCommand.permissionFor("queue")).isEqualTo("bots4velo.view");
+        assertThat(VBotCommand.permissionFor("hold")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("resume")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("reload", new String[]{"reload", "--check"}))
+            .isEqualTo("bots4velo.reload");
     }
 
     @Test
