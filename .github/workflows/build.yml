@@ -64,7 +64,7 @@ jobs:
         include:
           - minecraft: "1.16.5"
             protocol: "754"
-            server-java: "17"
+            server-java: "16"
           - minecraft: "1.21.11"
             protocol: "774"
             server-java: "21"

@@ -8,3 +8,4 @@ run/
 *.pid
 test-network/
 .integration-network/
+.integration-network-local/

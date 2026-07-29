@@ -170,6 +170,7 @@ ping-passthrough = "DISABLED"
 lobby = "127.0.0.1:$LOBBY_PORT"
 afk = "127.0.0.1:$AFK_PORT"
 try = ["lobby"]
+[forced-hosts]
 [advanced]
 login-ratelimit = 0
 connection-timeout = 5000
