@@ -127,7 +127,14 @@ public final class BotSession implements BehaviorTarget {
             behavior.snapshot(), onlineSeconds, FailureCategory.classify(lastDisconnectReason), events.snapshot());
     }
 
-    public void start() {
+    public synchronized void start() {
+        BotState current = state.get();
+        // Presence rules run periodically. Starting again while a connection
+        // is pending or already active creates a second client with the same
+        // username, which Velocity correctly rejects as a duplicate login.
+        if (current != BotState.STOPPED && current != BotState.FAILED) {
+            return;
+        }
         manualStop.set(false);
         terminalFailure.set(false);
         event("START_REQUESTED", "operator or automatic startup");

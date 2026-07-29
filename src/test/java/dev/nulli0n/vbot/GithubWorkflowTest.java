@@ -63,6 +63,7 @@ class GithubWorkflowTest {
         assertThat(script)
             .contains("[forced-hosts]")
             .contains("VELOCITY_JAVA")
+            .contains("--retry-all-errors")
             .contains("download_authme '5.6.0' '-legacy.jar'")
             .contains("fallback-register-delay-ms: 1500")
             .contains("TIMEOUT_FIXTURE_SELECTOR")
