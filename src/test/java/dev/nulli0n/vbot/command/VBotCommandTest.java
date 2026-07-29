@@ -17,7 +17,22 @@ class VBotCommandTest {
             .allMatch(VBotCommandTest::isAscii)
             .anyMatch(line -> line.contains("create"))
             .anyMatch(line -> line.contains("selector"));
-        assertThat(VBotCommand.helpLines(3)).isEmpty();
+        assertThat(VBotCommand.helpLines(3))
+            .allMatch(line -> line.length() <= 64)
+            .allMatch(VBotCommandTest::isAscii)
+            .anyMatch(line -> line.contains("invulnerable"))
+            .anyMatch(line -> line.contains("gamemode"))
+            .anyMatch(line -> line.contains("spawnpoint"))
+            .anyMatch(line -> line.contains("respawn"));
+        assertThat(VBotCommand.helpLines(4)).isEmpty();
+    }
+
+    @Test
+    void playerStateActionsUseControlPermission() {
+        assertThat(VBotCommand.permissionFor("invulnerable")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("gamemode")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("spawnpoint")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("respawn")).isEqualTo("bots4velo.control");
     }
 
     private static boolean isAscii(String value) {

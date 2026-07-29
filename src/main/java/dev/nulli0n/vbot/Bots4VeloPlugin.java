@@ -4,6 +4,8 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
@@ -12,6 +14,7 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import dev.nulli0n.vbot.bot.BotManager;
@@ -20,6 +23,11 @@ import dev.nulli0n.vbot.bot.BotSnapshot;
 import dev.nulli0n.vbot.bot.BotEvent;
 import dev.nulli0n.vbot.api.Bots4VeloApi;
 import dev.nulli0n.vbot.api.Bots4VeloApiProvider;
+import dev.nulli0n.vbot.backend.BackendControlPatch;
+import dev.nulli0n.vbot.backend.BackendControlResult;
+import dev.nulli0n.vbot.backend.BackendControlService;
+import dev.nulli0n.vbot.backend.VelocityBackendControlService;
+import dev.nulli0n.vbot.backend.protocol.BackendChannel;
 import dev.nulli0n.vbot.command.VBotCommand;
 import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
@@ -38,6 +46,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.time.Duration;
@@ -52,6 +61,8 @@ import java.util.function.Consumer;
     dependencies = {@Dependency(id = "tab", optional = true)}
 )
 public final class Bots4VeloPlugin implements Bots4VeloApi {
+    private static final MinecraftChannelIdentifier BACKEND_CONTROL_CHANNEL =
+        MinecraftChannelIdentifier.from(BackendChannel.ID);
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
@@ -65,6 +76,24 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private volatile PrometheusExporter prometheusExporter;
     private volatile TabIntegration tabIntegration;
     private volatile ScheduledTask tabTask;
+    private volatile VelocityBackendControlService backendControlClient;
+    private volatile boolean backendControlChannelRegistered;
+    private final BackendControlService backendControl = new BackendControlService() {
+        @Override
+        public CompletionStage<BackendControlResult> probe(String botId) {
+            return activeBackendControl().probe(botId);
+        }
+
+        @Override
+        public CompletionStage<BackendControlResult> apply(String botId, BackendControlPatch patch) {
+            return activeBackendControl().apply(botId, patch);
+        }
+
+        @Override
+        public CompletionStage<BackendControlResult> respawn(String botId) {
+            return activeBackendControl().respawn(botId);
+        }
+    };
 
     @Inject
     public Bots4VeloPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -80,6 +109,10 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             managedBotStore = ManagedBotStore.load(dataDirectory);
             config = ConfigLoader.load(dataDirectory, managedBotStore.definitions());
             manager = new BotManager(config, logger, new VelocityBackendProtocolDetector(proxy));
+            backendControlClient = createBackendControl(config);
+            proxy.getChannelRegistrar().register(BACKEND_CONTROL_CHANNEL);
+            backendControlChannelRegistered = true;
+            backendControlClient.start();
             registerOptionalIntegrations(manager, config);
             registerCommand();
             manager.startEnabled();
@@ -92,6 +125,19 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
+            stopPrometheus();
+            stopTabIntegration();
+            VelocityBackendControlService control = backendControlClient;
+            backendControlClient = null;
+            if (control != null) {
+                control.close();
+            }
+            BotManager active = manager;
+            manager = null;
+            if (active != null) {
+                active.close();
+            }
+            unregisterBackendControlChannel();
             logger.error("bots4velo initialization failed", exception);
         }
     }
@@ -99,7 +145,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private void registerCommand() {
         CommandManager commandManager = proxy.getCommandManager();
         CommandMeta meta = commandManager.metaBuilder("vbot").plugin(this).build();
-        commandManager.register(meta, new VBotCommand(this));
+        commandManager.register(meta, new VBotCommand(this, backendControl));
     }
 
     /**
@@ -110,19 +156,56 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         PluginMessages replacementMessages = PluginMessages.load(dataDirectory, logger);
         ManagedBotStore replacementStore = ManagedBotStore.load(dataDirectory);
         BotPluginConfig replacementConfig = ConfigLoader.load(dataDirectory, replacementStore.definitions());
-        BotManager replacement = new BotManager(replacementConfig, logger,
-            new VelocityBackendProtocolDetector(proxy));
-        registerOptionalIntegrations(replacement, replacementConfig);
+        BotManager replacement = null;
+        VelocityBackendControlService replacementBackend = null;
         try {
-            BotManager previous = manager;
+            replacement = new BotManager(replacementConfig, logger,
+                new VelocityBackendProtocolDetector(proxy));
+            replacementBackend = createBackendControl(replacementConfig);
+            registerOptionalIntegrations(replacement, replacementConfig);
+        }
+        catch (RuntimeException exception) {
+            if (replacementBackend != null) {
+                replacementBackend.close();
+            }
+            if (replacement != null) {
+                replacement.close();
+            }
+            throw exception;
+        }
+
+        BotManager previous = manager;
+        VelocityBackendControlService previousBackend = backendControlClient;
+        BotPluginConfig previousConfig = config;
+        ManagedBotStore previousStore = managedBotStore;
+        PluginMessages previousMessages = messages;
+        try {
+            replacementBackend.start();
             managedBotStore = replacementStore;
             messages = replacementMessages;
             config = replacementConfig;
             manager = replacement;
-            if (previous != null) {
-                previous.close();
-            }
+            backendControlClient = replacementBackend;
             replacement.startEnabled();
+        }
+        catch (RuntimeException exception) {
+            backendControlClient = previousBackend;
+            manager = previous;
+            config = previousConfig;
+            managedBotStore = previousStore;
+            messages = previousMessages;
+            replacementBackend.close();
+            replacement.close();
+            throw exception;
+        }
+
+        if (previousBackend != null) {
+            previousBackend.close();
+        }
+        if (previous != null) {
+            previous.close();
+        }
+        try {
             followTasks.values().forEach(ScheduledTask::cancel);
             followTasks.clear();
             startConfiguredFollows(replacementConfig);
@@ -136,12 +219,12 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startPrometheus(replacement, replacementConfig);
             stopTabIntegration();
             startTabIntegration(replacement);
-            return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
         }
         catch (RuntimeException exception) {
-            replacement.close();
-            throw exception;
+            logger.error("Bots4Velo reloaded bots successfully, but an optional integration failed to restart",
+                exception);
         }
+        return new ReloadResult(replacementConfig.bots().size(), replacementStore.definitions().size());
     }
 
     public BotPluginConfig validateConfiguration() throws IOException {
@@ -153,6 +236,10 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
                                                                String targetServer) throws IOException {
         BotManager active = manager();
         if (active.find(id).isPresent()) {
+            return ManagedCreateResult.ALREADY_EXISTS;
+        }
+        if (active.sessions().stream().anyMatch(session ->
+            session.definition().username().equalsIgnoreCase(username))) {
             return ManagedCreateResult.ALREADY_EXISTS;
         }
         if (active.snapshots().size() >= active.maximumBots()) {
@@ -196,9 +283,31 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         presenceTasks.clear();
         stopPrometheus();
         stopTabIntegration();
+        VelocityBackendControlService control = backendControlClient;
+        backendControlClient = null;
+        if (control != null) {
+            control.close();
+        }
+        unregisterBackendControlChannel();
         BotManager active = manager;
         if (active != null) {
             active.close();
+        }
+    }
+
+    @Subscribe
+    public void onPluginMessage(PluginMessageEvent event) {
+        VelocityBackendControlService control = backendControlClient;
+        if (control != null && control.handlePluginMessage(event)) {
+            event.setResult(PluginMessageEvent.ForwardResult.handled());
+        }
+    }
+
+    @Subscribe
+    public void onServerPostConnect(ServerPostConnectEvent event) {
+        VelocityBackendControlService control = backendControlClient;
+        if (control != null) {
+            control.handleServerPostConnect(event.getPlayer());
         }
     }
 
@@ -259,6 +368,31 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
 
     public ProxyServer proxy() {
         return proxy;
+    }
+
+    public BackendControlService backendControl() {
+        return backendControl;
+    }
+
+    public boolean backendControlEnabled() {
+        VelocityBackendControlService control = backendControlClient;
+        return control != null && control.enabled();
+    }
+
+    private BackendControlService activeBackendControl() {
+        VelocityBackendControlService control = backendControlClient;
+        return control == null ? BackendControlService.unavailable() : control;
+    }
+
+    private VelocityBackendControlService createBackendControl(BotPluginConfig configuration) {
+        return new VelocityBackendControlService(proxy, this, logger, configuration, () -> manager);
+    }
+
+    private void unregisterBackendControlChannel() {
+        if (backendControlChannelRegistered) {
+            proxy.getChannelRegistrar().unregister(BACKEND_CONTROL_CHANNEL);
+            backendControlChannelRegistered = false;
+        }
     }
 
     public List<String> serverNames() {

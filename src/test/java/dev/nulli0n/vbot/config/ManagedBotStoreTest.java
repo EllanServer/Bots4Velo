@@ -55,6 +55,33 @@ class ManagedBotStoreTest {
     }
 
     @Test
+    void roundTripsManagedPlayerState() throws Exception {
+        BotDefinition base = ManagedBotStore.createDefinition(
+            "Protected01", "AFK_Protected01", "secret", "survival");
+        BotPluginConfig.PlayerStateConfig playerState = new BotPluginConfig.PlayerStateConfig(
+            BotPluginConfig.InvulnerabilityMode.ENABLED,
+            BotPluginConfig.ManagedGameMode.SURVIVAL,
+            1_250L,
+            new BotPluginConfig.RespawnPointConfig(
+                BotPluginConfig.RespawnPointMode.FIXED, "world", 12.5D, 64.0D, -8.25D, 180.0F));
+        BotDefinition definition = new BotDefinition(
+            base.id(), base.enabled(), base.username(), base.password(), base.targetServer(),
+            base.protocolDetectionServer(), base.renderDistance(), base.auth(), base.serverSwitchCommand(),
+            base.serverSwitchDelayMillis(), base.serverSwitchMaximumAttempts(), base.afterLoginCommands(),
+            base.groups(), base.tags(), base.displayName(), base.tabGroup(), base.protocolOverride(),
+            base.templateName(), base.behavior(), playerState);
+
+        ManagedBotStore store = ManagedBotStore.load(temporaryDirectory);
+        store.add(definition);
+
+        BotDefinition reloaded = ManagedBotStore.load(temporaryDirectory)
+            .definitions().get("protected01");
+        assertThat(reloaded.playerState()).isEqualTo(playerState);
+        assertThat(Files.readString(temporaryDirectory.resolve(ManagedBotStore.FILE_NAME)))
+            .contains("player-state:", "invulnerable: ENABLED", "game-mode: SURVIVAL", "mode: FIXED");
+    }
+
+    @Test
     void rejectsUnsafeIdentifiersBeforeWriting() {
         assertThatThrownBy(() -> ManagedBotStore.createDefinition(
             "bad id", "AFK_Good", "secret", "survival"))

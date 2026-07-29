@@ -252,6 +252,11 @@ public final class BotSession implements BehaviorTarget {
         followTarget = target == null ? "" : target.trim();
     }
 
+    /** Records an operator-visible event produced by a proxy-side integration. */
+    public void recordExternalEvent(String type, String detail) {
+        event(type, detail);
+    }
+
     /**
      * Stops the configured chat-command switch loop before Velocity moves this
      * connection through its own API. Otherwise the retry loop could pull the

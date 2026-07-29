@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.nulli0n.bots4velo"
-version = providers.gradleProperty("pluginVersion").orElse("2.4.0").get()
+version = providers.gradleProperty("pluginVersion").orElse("2.5.0").get()
 
 java {
     toolchain {
@@ -60,6 +60,7 @@ dependencies {
     annotationProcessor("com.velocitypowered:velocity-api:3.4.0")
 
     implementation(project(":transport-api"))
+    implementation(project(":backend-protocol"))
     implementation("org.yaml:snakeyaml:2.5")
     implementation("com.google.code.gson:gson:2.13.2")
 
@@ -68,6 +69,13 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation("com.velocitypowered:velocity-api:3.4.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+val stagePaperCompanion = tasks.register<Copy>("stagePaperCompanion") {
+    dependsOn(":paper-companion:shadowJar")
+    from(project(":paper-companion").layout.buildDirectory.file(
+        "libs/bots4velo-paper-${project.version}.jar"))
+    into(layout.buildDirectory.dir("libs"))
 }
 
 tasks {
@@ -82,6 +90,7 @@ tasks {
     }
 
     shadowJar {
+        dependsOn(stagePaperCompanion)
         dependsOn(
             ":adapters:legacy-1_16_5:shadowJar",
             ":adapters:modern-1_21_11:shadowJar",
@@ -128,10 +137,15 @@ val writeArtifactChecksum = tasks.register("writeArtifactChecksum") {
     dependsOn(tasks.shadowJar)
     doLast {
         val jars = fileTree(layout.buildDirectory.dir("libs")) { include("*.jar") }.files
-        check(jars.size == 1) { "Expected exactly one plugin JAR, found ${jars.size}" }
-        val jar = jars.single()
-        val digest = MessageDigest.getInstance("SHA-256").digest(jar.readBytes())
-            .joinToString("") { byte: Byte -> "%02x".format(byte) }
-        jar.resolveSibling(jar.name + ".sha256").writeText("$digest  ${jar.name}\n")
+            .sortedBy { it.name }
+        check(jars.map { it.name }.toSet() == setOf(
+            "bots4velo-${project.version}.jar",
+            "bots4velo-paper-${project.version}.jar"
+        )) { "Expected Velocity and Paper plugin JARs, found ${jars.map { it.name }}" }
+        jars.forEach { jar ->
+            val digest = MessageDigest.getInstance("SHA-256").digest(jar.readBytes())
+                .joinToString("") { byte: Byte -> "%02x".format(byte) }
+            jar.resolveSibling(jar.name + ".sha256").writeText("$digest  ${jar.name}\n")
+        }
     }
 }

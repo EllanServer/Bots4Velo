@@ -38,13 +38,36 @@ public record BotPluginConfig(
         String webhookUrl,
         List<PresenceRule> presenceRules,
         String prometheusAddress,
-        int prometheusPort
+        int prometheusPort,
+        BackendControlConfig backendControl
     ) {
         public RuntimeConfig {
             schedules = List.copyOf(schedules);
             webhookUrl = webhookUrl == null ? "" : webhookUrl.trim();
             presenceRules = List.copyOf(presenceRules);
             prometheusAddress = prometheusAddress == null ? "127.0.0.1" : prometheusAddress.trim();
+            backendControl = backendControl == null ? BackendControlConfig.disabled() : backendControl;
+        }
+
+        /** Source-compatible constructor for the complete 2.4 runtime model. */
+        public RuntimeConfig(
+            long autoStartDelayMillis,
+            long spawnIntervalMillis,
+            int maximumBots,
+            long commandIntervalMillis,
+            long resourcePackStepDelayMillis,
+            ResourcePackMode resourcePackMode,
+            boolean autoRespawn,
+            ReconnectConfig reconnect,
+            List<ScheduledAction> schedules,
+            String webhookUrl,
+            List<PresenceRule> presenceRules,
+            String prometheusAddress,
+            int prometheusPort
+        ) {
+            this(autoStartDelayMillis, spawnIntervalMillis, maximumBots, commandIntervalMillis,
+                resourcePackStepDelayMillis, resourcePackMode, autoRespawn, reconnect, schedules, webhookUrl,
+                presenceRules, prometheusAddress, prometheusPort, BackendControlConfig.disabled());
         }
 
         public RuntimeConfig(
@@ -59,7 +82,23 @@ public record BotPluginConfig(
         ) {
             this(autoStartDelayMillis, spawnIntervalMillis, maximumBots, commandIntervalMillis,
                 resourcePackStepDelayMillis, resourcePackMode, autoRespawn, reconnect, List.of(), "", List.of(),
-                "127.0.0.1", 0);
+                "127.0.0.1", 0, BackendControlConfig.disabled());
+        }
+    }
+
+    public record BackendControlConfig(
+        boolean enabled,
+        String secret,
+        String secretEnv,
+        long timeoutMillis
+    ) {
+        public BackendControlConfig {
+            secret = secret == null ? "" : secret;
+            secretEnv = secretEnv == null ? "" : secretEnv.trim();
+        }
+
+        public static BackendControlConfig disabled() {
+            return new BackendControlConfig(false, "", "", 3_000L);
         }
     }
 
@@ -132,7 +171,8 @@ public record BotPluginConfig(
         String tabGroup,
         ProtocolSelection protocolOverride,
         String templateName,
-        BehaviorConfig behavior
+        BehaviorConfig behavior,
+        PlayerStateConfig playerState
     ) {
         public BotDefinition {
             afterLoginCommands = List.copyOf(afterLoginCommands);
@@ -142,6 +182,35 @@ public record BotPluginConfig(
             tabGroup = tabGroup == null ? "" : tabGroup.trim();
             templateName = templateName == null ? "" : templateName;
             behavior = behavior == null ? BehaviorConfig.disabled() : behavior;
+            playerState = playerState == null ? PlayerStateConfig.unchanged() : playerState;
+        }
+
+        /** Source-compatible constructor for the complete 2.4 bot model. */
+        public BotDefinition(
+            String id,
+            boolean enabled,
+            String username,
+            String password,
+            String targetServer,
+            String protocolDetectionServer,
+            int renderDistance,
+            AuthConfig auth,
+            String serverSwitchCommand,
+            long serverSwitchDelayMillis,
+            int serverSwitchMaximumAttempts,
+            List<String> afterLoginCommands,
+            List<String> groups,
+            List<String> tags,
+            String displayName,
+            String tabGroup,
+            ProtocolSelection protocolOverride,
+            String templateName,
+            BehaviorConfig behavior
+        ) {
+            this(id, enabled, username, password, targetServer, protocolDetectionServer, renderDistance, auth,
+                serverSwitchCommand, serverSwitchDelayMillis, serverSwitchMaximumAttempts, afterLoginCommands,
+                groups, tags, displayName, tabGroup, protocolOverride, templateName, behavior,
+                PlayerStateConfig.unchanged());
         }
 
         /**
@@ -164,8 +233,66 @@ public record BotPluginConfig(
         ) {
             this(id, enabled, username, password, targetServer, protocolDetectionServer, renderDistance, auth,
                 serverSwitchCommand, serverSwitchDelayMillis, serverSwitchMaximumAttempts, afterLoginCommands,
-                List.of(), List.of(), "", "", null, "", BehaviorConfig.disabled());
+                List.of(), List.of(), "", "", null, "", BehaviorConfig.disabled(), PlayerStateConfig.unchanged());
         }
+    }
+
+    public record PlayerStateConfig(
+        InvulnerabilityMode invulnerability,
+        ManagedGameMode gameMode,
+        long applyDelayMillis,
+        RespawnPointConfig respawnPoint
+    ) {
+        public PlayerStateConfig {
+            invulnerability = invulnerability == null ? InvulnerabilityMode.KEEP : invulnerability;
+            gameMode = gameMode == null ? ManagedGameMode.KEEP : gameMode;
+            respawnPoint = respawnPoint == null ? RespawnPointConfig.unchanged() : respawnPoint;
+        }
+
+        public static PlayerStateConfig unchanged() {
+            return new PlayerStateConfig(InvulnerabilityMode.KEEP, ManagedGameMode.KEEP, 0L,
+                RespawnPointConfig.unchanged());
+        }
+    }
+
+    public record RespawnPointConfig(
+        RespawnPointMode mode,
+        String world,
+        double x,
+        double y,
+        double z,
+        float yaw
+    ) {
+        public RespawnPointConfig {
+            mode = mode == null ? RespawnPointMode.UNCHANGED : mode;
+            world = world == null ? "" : world.trim();
+        }
+
+        public static RespawnPointConfig unchanged() {
+            return new RespawnPointConfig(RespawnPointMode.UNCHANGED, "", 0.0D, 0.0D, 0.0D, 0.0F);
+        }
+    }
+
+    public enum InvulnerabilityMode {
+        KEEP,
+        ENABLED,
+        DISABLED
+    }
+
+    public enum ManagedGameMode {
+        KEEP,
+        SURVIVAL,
+        CREATIVE,
+        ADVENTURE,
+        SPECTATOR
+    }
+
+    public enum RespawnPointMode {
+        UNCHANGED,
+        CURRENT,
+        FIXED,
+        WORLD_SPAWN,
+        CLEAR
     }
 
     public record BehaviorConfig(

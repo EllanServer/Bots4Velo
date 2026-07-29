@@ -1,13 +1,21 @@
 package dev.nulli0n.vbot.config;
 
+import dev.nulli0n.vbot.backend.protocol.ProtocolSecrets;
+
 import dev.nulli0n.vbot.config.BotPluginConfig.AuthConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.AuthMode;
+import dev.nulli0n.vbot.config.BotPluginConfig.BackendControlConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.BehaviorConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.BehaviorMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.BehaviorPoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.BotDefinition;
+import dev.nulli0n.vbot.config.BotPluginConfig.InvulnerabilityMode;
+import dev.nulli0n.vbot.config.BotPluginConfig.ManagedGameMode;
+import dev.nulli0n.vbot.config.BotPluginConfig.PlayerStateConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.ReconnectConfig;
+import dev.nulli0n.vbot.config.BotPluginConfig.RespawnPointConfig;
+import dev.nulli0n.vbot.config.BotPluginConfig.RespawnPointMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.ResourcePackMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.RuntimeConfig;
 import dev.nulli0n.vbot.protocol.ProtocolSelection;
@@ -65,6 +73,7 @@ public final class ConfigLoader {
                 throw new IllegalArgumentException("Configured bot count " + merged.size()
                     + " exceeds runtime.maximum-bots " + base.runtime().maximumBots());
             }
+            validateUniqueUsernames(merged);
             return new BotPluginConfig(base.proxy(), base.runtime(), merged);
         }
     }
@@ -79,10 +88,19 @@ public final class ConfigLoader {
     }
 
     static BotPluginConfig parse(InputStream stream) {
-        return parse(stream, CredentialResolver.empty());
+        return parse(stream, CredentialResolver.empty(), System.getenv());
+    }
+
+    static BotPluginConfig parse(InputStream stream, Map<String, String> environment) {
+        return parse(stream, CredentialResolver.empty(), environment);
     }
 
     private static BotPluginConfig parse(InputStream stream, CredentialResolver credentials) {
+        return parse(stream, credentials, System.getenv());
+    }
+
+    private static BotPluginConfig parse(InputStream stream, CredentialResolver credentials,
+                                         Map<String, String> environment) {
         LoaderOptions options = new LoaderOptions();
         options.setAllowDuplicateKeys(false);
         Yaml yaml = new Yaml(new SafeConstructor(options));
@@ -110,6 +128,8 @@ public final class ConfigLoader {
         if (reconnectConfig.maximumDelayMillis() < reconnectConfig.initialDelayMillis()) {
             throw new IllegalArgumentException("reconnect.maximum-delay-ms must be >= initial-delay-ms");
         }
+        BackendControlConfig backendControlConfig = parseBackendControl(
+            section(runtime, "backend-control"), environment);
         RuntimeConfig runtimeConfig = new RuntimeConfig(
             longValue(runtime, "auto-start-delay-ms", 3_000, 0, 3_600_000),
             longValue(runtime, "spawn-interval-ms", 1_500, 0, 60_000),
@@ -124,11 +144,13 @@ public final class ConfigLoader {
             text(runtime, "webhook-url", ""),
             parsePresenceRules(runtime.get("presence-rules")),
             text(runtime, "prometheus-address", "127.0.0.1"),
-            integer(runtime, "prometheus-port", 0, 0, 65_535)
+            integer(runtime, "prometheus-port", 0, 0, 65_535),
+            backendControlConfig
         );
 
         Map<String, Object> templates = section(root, "templates");
         Map<String, BotDefinition> bots = parseBotDefinitions(section(root, "bots"), templates, credentials);
+        validateUniqueUsernames(bots);
         if (bots.size() > runtimeConfig.maximumBots()) {
             throw new IllegalArgumentException("Configured bot count " + bots.size()
                 + " exceeds runtime.maximum-bots " + runtimeConfig.maximumBots());
@@ -201,13 +223,26 @@ public final class ConfigLoader {
                 text(bot, "tab-group", ""),
                 optionalProtocol(bot, id),
                 templateDescription(bot),
-                parseBehavior(section(bot, "behavior"), id)
+                parseBehavior(section(bot, "behavior"), id),
+                parsePlayerState(section(bot, "player-state"), id)
             );
             if (bots.putIfAbsent(id.toLowerCase(Locale.ROOT), definition) != null) {
                 throw new IllegalArgumentException("Duplicate bot id ignoring case: " + id);
             }
         }
         return bots;
+    }
+
+    private static void validateUniqueUsernames(Map<String, BotDefinition> bots) {
+        Map<String, String> owners = new LinkedHashMap<>();
+        for (BotDefinition definition : bots.values()) {
+            String username = definition.username().toLowerCase(Locale.ROOT);
+            String previous = owners.putIfAbsent(username, definition.id());
+            if (previous != null) {
+                throw new IllegalArgumentException("Bots " + previous + " and " + definition.id()
+                    + " use the same username ignoring case: " + definition.username());
+            }
+        }
     }
 
     private static Map<String, Object> resolveBot(Object rawBot, String id, Map<String, Object> templates) {
@@ -339,6 +374,54 @@ public final class ConfigLoader {
         }
         return new BehaviorConfig(mode, enabled, interval, radius, yawStep, randomYaw, jump, swing, sneak, commands, path,
             serverCycle, serverCycleEvery, followPlayer);
+    }
+
+    private static BackendControlConfig parseBackendControl(Map<String, Object> backendControl,
+                                                             Map<String, String> environment) {
+        boolean enabled = bool(backendControl, "enabled", false);
+        String literalSecret = text(backendControl, "secret", "");
+        String secretEnv = text(backendControl, "secret-env", "");
+        String resolvedSecret = literalSecret;
+        if (!secretEnv.isBlank()) {
+            String environmentSecret = environment == null ? null : environment.get(secretEnv);
+            if (environmentSecret != null && !environmentSecret.isBlank()) {
+                resolvedSecret = environmentSecret;
+            }
+        }
+        if (enabled && resolvedSecret.isBlank()) {
+            throw new IllegalArgumentException(
+                "runtime.backend-control requires secret or a populated secret-env when enabled");
+        }
+        if (enabled) {
+            ProtocolSecrets.decode(resolvedSecret);
+        }
+        return new BackendControlConfig(enabled, resolvedSecret, secretEnv,
+            longValue(backendControl, "timeout-ms", 3_000L, 250L, 60_000L));
+    }
+
+    private static PlayerStateConfig parsePlayerState(Map<String, Object> playerState, String id) {
+        InvulnerabilityMode invulnerability = enumValue(InvulnerabilityMode.class,
+            text(playerState, "invulnerable", "KEEP"), "bots." + id + ".player-state.invulnerable");
+        ManagedGameMode gameMode = enumValue(ManagedGameMode.class,
+            text(playerState, "game-mode", "KEEP"), "bots." + id + ".player-state.game-mode");
+        long applyDelayMillis = longValue(playerState, "apply-delay-ms", 0L, 0L, 60_000L);
+        Map<String, Object> respawnPoint = section(playerState, "respawn-point");
+        RespawnPointMode mode = enumValue(RespawnPointMode.class,
+            text(respawnPoint, "mode", "UNCHANGED"), "bots." + id + ".player-state.respawn-point.mode");
+        String world = text(respawnPoint, "world", "");
+        if (mode == RespawnPointMode.FIXED && world.isBlank()) {
+            throw new IllegalArgumentException("bots." + id
+                + ".player-state.respawn-point.world is required for FIXED mode");
+        }
+        RespawnPointConfig parsedRespawnPoint = new RespawnPointConfig(
+            mode,
+            world,
+            doubleValue(respawnPoint, "x", 0.0D, -30_000_000D, 30_000_000D),
+            doubleValue(respawnPoint, "y", 0.0D, -2_048D, 2_048D),
+            doubleValue(respawnPoint, "z", 0.0D, -30_000_000D, 30_000_000D),
+            (float) doubleValue(respawnPoint, "yaw", 0.0D, -360.0D, 360.0D)
+        );
+        return new PlayerStateConfig(invulnerability, gameMode, applyDelayMillis, parsedRespawnPoint);
     }
 
     private static List<BotPluginConfig.ScheduledAction> parseSchedules(Object value) {

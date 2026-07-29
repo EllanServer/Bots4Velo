@@ -1,7 +1,8 @@
 # Bots4Velo
 
-一个独立、可构建为单 JAR 的 Velocity 插件原型。每个机器人都是嵌入插件进程的
-Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
+一个由 Velocity 主插件和可选 Paper 后端伴侣组成的机器人系统。每个机器人都是嵌入代理进程的
+Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要修改无敌、游戏模式或重生点时，
+再由后端伴侣执行服务器权威操作。
 
 ## 支持版本
 
@@ -40,6 +41,7 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 - `/vbot status` 提供当前协议/状态以及本进程内累计 PLAY、非人工断线、资源包成功次数和时间戳，
   用于稳定性观察与故障审计。
 - 协议级绝对位置和视角控制，并可输出单个或全部机器人的 JSON 监控快照。
+- 通过带 HMAC 签名和防重放校验的 Paper 伴侣设置无敌、游戏模式与重生点，并支持手动重生。
 
 `ACCEPT_WITHOUT_DOWNLOAD` 只模拟客户端状态，不会下载或校验资源包。若 CraftEngine
 还使用自定义插件消息或服务端回调校验，必须在真实测试网络中捕获断线原因并补充对应处理。
@@ -56,19 +58,24 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity。
 .\gradlew.bat clean check shadowJar
 ```
 
-默认产物位于 `build/libs/bots4velo-2.4.0.jar`；也可以通过
-`-PpluginVersion=<version>` 覆盖构建版本。
-`check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
-只需把这个 JAR 放入 Velocity 的 `plugins` 目录。首次启动会生成
-`plugins/bots4velo/config.yml`。
+默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-单 JAR 同时包含四套隔离协议栈，因此文件会明显大于普通 Velocity 插件；这是避免不同版本
-MCProtocolLib 及其传递依赖冲突的设计结果。
+- `bots4velo-2.5.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-2.5.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+
+也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
+`check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
+Velocity 主插件首次启动会生成 `plugins/bots4velo/config.yml`；Paper 伴侣首次启动会生成
+`plugins/Bots4VeloPaper/config.yml`。不需要玩家状态控制时可以只安装 Velocity JAR，并保持
+`runtime.backend-control.enabled: false`。
+
+Velocity JAR 同时包含四套隔离协议栈，因此文件会明显大于 Paper 伴侣和普通代理插件；这是避免
+不同版本 MCProtocolLib 及其传递依赖冲突的设计结果。两个 JAR 不能互换安装。
 
 ## GitHub 大版本发布
 
-每次大版本会自动执行测试、构建阴影 JAR、上传 GitHub Actions artifact，并创建同名
-GitHub Release（附带 JAR 和自动生成的 Release Notes）。仅 `vX.0.0` 形式的标签会触发，
+每次大版本会自动执行测试、构建两个阴影 JAR、上传 GitHub Actions artifact，并创建同名
+GitHub Release（附带两个 JAR、各自的 SHA-256 和自动生成的 Release Notes）。仅 `vX.0.0` 形式的标签会触发，
 例如 `v2.0.0`；次版本与修订版本标签（例如 `v2.1.0`、`v2.0.1`）不会触发发布。普通 commit 和 Pull Request
 由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
 
@@ -78,14 +85,19 @@ git push origin v2.0.0
 ```
 
 发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.0.0` 生成
-`bots4velo-2.0.0.jar` 及同名 `.sha256` 校验文件。每一个大版本都应先完成测试、更新文档与配置示例，再 commit、push、
-创建并推送对应标签。
+`bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
+测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
+
+`v2.5.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
+同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
 
 ## 集成验证
 
 普通 CI 会在 `1.16.5`、`1.21.11`、`26.1.2` 与 `26.2` 四个目标上执行协议映射回归，并为每个
-目标下载并启动一个临时 Velocity + AuthMe 登录服 + lobby + AFK Paper 网络，验证登录、PLAY、跨服与
-后端/代理重启恢复。完整日志会作为 CI artifact 上传。`scripts/ci/run-network-integration.sh` 也可在
+目标下载并启动一个临时 Velocity + AuthMe 登录服 + lobby + AFK Paper 网络。两个 Paper 后端都会安装
+伴侣 JAR 并使用与 Velocity 相同的测试密钥；CI 除验证登录、PLAY、跨服与后端/代理重启恢复外，还会等待
+签名策略 ACK，并确认后端恢复和代理重启后重新应用玩家状态。完整日志会作为 CI artifact 上传。
+`scripts/ci/run-network-integration.sh` 也可在
 Linux 上单独执行。现有本地隔离网络启动后还可执行：
 
 ```powershell
@@ -113,7 +125,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 管理权限为 `bots4velo.admin`。命令包括：
 
 ```text
-/vbot help [1|2]
+/vbot help [1|2|3]
 /vbot list
 /vbot status <id>
 /vbot monitor [id]
@@ -131,6 +143,11 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot reconnect <id|selector>
 /vbot command <id|selector> <command...>
 /vbot behavior <id|selector> <start|pause|status>
+/vbot invulnerable <id|selector> <on|off|keep>
+/vbot gamemode <id|selector> <survival|creative|adventure|spectator|unchanged>
+/vbot spawnpoint <id|selector> <current|worldspawn|clear>
+/vbot spawnpoint <id|selector> set <world> <x> <y> <z> [yaw]
+/vbot respawn <id|selector>
 /vbot reload
 ```
 
@@ -153,6 +170,72 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 权限默认采用最小职责划分：`bots4velo.view` 用于查看、`bots4velo.control` 用于连接与移动控制、
 `bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
 `bots4velo.admin` 拥有全部权限。
+
+### Paper 后端玩家状态控制
+
+无敌、游戏模式和个人重生点均由 Paper 服务端决定，客户端数据包无法可靠修改这些属性。要使用相关
+命令，必须把 `bots4velo-paper-<version>.jar` 安装到每一个 Paper 后端，并让 Velocity 与所有伴侣使用
+完全相同的共享密钥。密钥按 UTF-8 解码后至少需要 32 字节；也可使用 `base64:<内容>`，但 Base64 解码后
+仍必须达到 32 字节。
+
+推荐把密钥放进 Velocity 进程环境变量：
+
+```yaml
+runtime:
+  backend-control:
+    enabled: true
+    secret: ""
+    secret-env: "BOTS4VELO_BACKEND_SECRET"
+    timeout-ms: 3000
+```
+
+Paper 伴侣默认读取同名环境变量，也可在每一个 Paper 的
+`plugins/Bots4VeloPaper/config.yml` 写入同一值作为回退：
+
+```yaml
+shared-secret-env: "BOTS4VELO_BACKEND_SECRET"
+shared-secret: "replace-with-the-same-secret-of-at-least-32-bytes"
+```
+
+环境变量存在且非空时严格优先于 `shared-secret`；不要把真实密钥提交到 Git。修改密钥后必须同步重启
+Velocity 和全部 Paper 后端，并保持主机时间同步，否则签名 ACK 会因时间窗校验失败。
+
+可通过模板或单个机器人声明登录后自动恢复的期望状态：
+
+```yaml
+bots:
+  Farm01:
+    player-state:
+      invulnerable: ENABLED # KEEP / ENABLED / DISABLED
+      game-mode: SURVIVAL # KEEP / SURVIVAL / CREATIVE / ADVENTURE / SPECTATOR
+      apply-delay-ms: 1000
+      respawn-point:
+        mode: FIXED # UNCHANGED / CURRENT / FIXED / WORLD_SPAWN / CLEAR
+        world: world
+        x: 100.5
+        y: 64
+        z: -20.5
+        yaw: 0
+```
+
+`CURRENT` 使用机器人应用策略时的位置，`WORLD_SPAWN` 使用世界出生点，`CLEAR` 清除个人重生点，
+`FIXED` 使用给定世界与坐标。期望状态会在认证完成、切换后端及重连后重新发送；Paper 伴侣还会在
+同一在线会话的换世界和死亡重生后重放已缓存策略，并在退出时清除缓存。运行时命令接受所有现有批量选择器并使用
+`bots4velo.control` 权限：
+
+- `invulnerable on|off|keep` 设置真实服务端 invulnerable 标记；启用时伴侣还会取消该机器人的伤害事件；
+- `gamemode` 设置四种原版游戏模式，`unchanged` 保留当前值；
+- `spawnpoint current|worldspawn|clear|set ...` 修改个人重生点；
+- `respawn` 让已经死亡的机器人立即重生；机器人尚存活时返回成功但不会改变状态。
+
+所有新配置默认是安全 no-op：后端控制默认关闭，`invulnerable`/`game-mode` 为 `KEEP`，重生点为
+`UNCHANGED`。开启控制但漏装伴侣、密钥不一致或 ACK 超时时，命令会明确返回失败，不会把“消息已发送”
+误报为成功。
+
+安全边界是“仅控制承载该消息的机器人自身”，不是远程控制台：协议校验 HMAC、时间戳、一次性 nonce、
+请求与响应关联 ID、当前后端和机器人 UUID；完全相同的重试只回放原 ACK，不会重复执行操作，其余重放与
+跨玩家目标均被拒绝。共享密钥或代理/Paper 文件系统失陷
+仍会破坏这一边界，因此应限制配置文件权限、隔离后端端口，且不要让普通客户端直接连接 Paper。
 
 插件默认消息为英文。首次启动会生成 `plugins/bots4velo/messages.yml`；将其中的
 `language` 改为 `zh_CN` 即可启用内置中文翻译，也可以在该文件覆写已列出的消息文本。
@@ -286,7 +369,7 @@ Smart AuthMe Login UI 的 `premiumNameProtection` 可能拒绝与 Mojang 正版�
 
 ## 已完成的本地集成验证
 
-- 同一个最终 JAR 分别以协议 754、774、775、776 通过 Velocity 进入对应 Paper 后端。
+- 同一个最终 Velocity JAR 分别以协议 754、774、775、776 通过 Velocity 进入对应 Paper 后端。
 - 机器人被传送至出生区块以外的 `(256,256)`：在线时区块已加载且含玩家实体，退出 15 秒后卸载。
 - 后端重启期间按 1/2/4/5 秒退避重连，并在后端恢复后重新进入 PLAY。
 - 三机器人在登录后端不可用期间持续重试：实际 TCP 连接按全局间隔交错，后端恢复后无需人工操作

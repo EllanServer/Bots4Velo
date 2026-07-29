@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Creates a disposable, offline-mode Velocity test network and proves that a
-# Bots4Velo client can authenticate, reach PLAY, change backend and recover
-# after controlled backend/proxy outages. It is intentionally self-contained:
-# Paper/Velocity/AuthMe binaries are downloaded at runtime and are never
-# committed to this repository.
+# Bots4Velo client can authenticate, reach PLAY, change backend, receive signed
+# Paper policy acknowledgements and recover after controlled backend/proxy
+# outages. It is intentionally self-contained: Paper/Velocity/AuthMe binaries
+# are downloaded at runtime and are never committed to this repository.
 set -Eeuo pipefail
 
 MINECRAFT_VERSION="${1:?usage: run-network-integration.sh <minecraft-version> <protocol-id>}"
 PROTOCOL_ID="${2:?usage: run-network-integration.sh <minecraft-version> <protocol-id>}"
 WORK_ROOT="${WORK_ROOT:-$PWD/.integration-network/$MINECRAFT_VERSION}"
-PLUGIN_JAR="${PLUGIN_JAR:-$PWD/build/libs/bots4velo-*.jar}"
+VELOCITY_PLUGIN_JAR="${VELOCITY_PLUGIN_JAR:-$PWD/build/libs/bots4velo-[0-9]*.jar}"
+PAPER_COMPANION_JAR="${PAPER_COMPANION_JAR:-$PWD/build/libs/bots4velo-paper-*.jar}"
 PAPER_JAVA="${PAPER_JAVA:-${JAVA_HOME:-}/bin/java}"
 VELOCITY_JAVA="${VELOCITY_JAVA:-$PAPER_JAVA}"
-USER_AGENT="bots4velo-integration/2.4.0 (https://github.com/Bots4Velo/Bots4Velo)"
+USER_AGENT="bots4velo-integration/2.5.0 (https://github.com/EllanServer/Bots4Velo)"
+BACKEND_SHARED_SECRET="${BACKEND_SHARED_SECRET:-Bots4Velo-CI-Backend-Control-Key-2026-0001}"
 PROXY_PORT="${PROXY_PORT:-25590}"
 LOBBY_PORT="${LOBBY_PORT:-25591}"
 AFK_PORT="${AFK_PORT:-25592}"
@@ -128,8 +130,18 @@ for asset in json.load(sys.stdin).get("assets", []):
 start_paper() {
   local name="$1" port="$2"
   local directory="$WORK_ROOT/$name"
-  mkdir -p "$directory"
+  mkdir -p "$directory/plugins/Bots4VeloPaper"
   cp "$WORK_ROOT/paper.jar" "$directory/paper.jar"
+  cp "$PAPER_COMPANION_JAR" "$directory/plugins/bots4velo-paper.jar"
+  cat > "$directory/plugins/Bots4VeloPaper/config.yml" <<EOF
+shared-secret: "$BACKEND_SHARED_SECRET"
+maximum-clock-skew-seconds: 60
+replay-retention-seconds: 300
+maximum-replay-entries: 4096
+maximum-message-bytes: 16384
+cancel-damage-events: true
+log-rejected-messages: true
+EOF
   printf 'eula=true\n' > "$directory/eula.txt"
   cat > "$directory/server.properties" <<EOF
 server-ip=127.0.0.1
@@ -161,13 +173,15 @@ EOF
   fi
   wait_for_port "$port" "$PAPER_START_TIMEOUT"
   wait_for_log "$directory/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
+  wait_for_log "$directory/console.log" \
+    'Listening for authenticated Bots4Velo policies on bots4velo:control' "$PAPER_START_TIMEOUT"
 }
 
 start_velocity() {
   local velocity_directory="$WORK_ROOT/velocity"
   mkdir -p "$velocity_directory/plugins/bots4velo"
   cp "$WORK_ROOT/velocity.jar" "$velocity_directory/velocity.jar"
-  cp "$PLUGIN_JAR" "$velocity_directory/plugins/bots4velo.jar"
+  cp "$VELOCITY_PLUGIN_JAR" "$velocity_directory/plugins/bots4velo.jar"
   cat > "$velocity_directory/velocity.toml" <<EOF
 config-version = "2.8"
 bind = "127.0.0.1:$PROXY_PORT"
@@ -200,6 +214,11 @@ runtime:
   spawn-interval-ms: 250
   command-interval-ms: 100
   resource-pack-mode: "ACCEPT_WITHOUT_DOWNLOAD"
+  backend-control:
+    enabled: true
+    secret: "$BACKEND_SHARED_SECRET"
+    secret-env: ""
+    timeout-ms: 5000
   reconnect:
     initial-delay-ms: 500
     maximum-delay-ms: 2000
@@ -235,6 +254,14 @@ bots:
     server-switch-command: "server {server}"
     server-switch-delay-ms: 500
     server-switch-maximum-attempts: 6
+    player-state:
+      invulnerable: "ENABLED"
+      game-mode: "SURVIVAL"
+      # Gives the shell enough time to start observing the recovered AFK
+      # connection before the signed policy acknowledgement is emitted.
+      apply-delay-ms: 3000
+      respawn-point:
+        mode: "CURRENT"
     auth:
       mode: "AUTO"
       login-command: "login {password}"
@@ -287,9 +314,14 @@ restart_velocity() {
 
 mkdir -p "$WORK_ROOT/lobby/plugins" "$WORK_ROOT/afk"
 shopt -s nullglob
-plugin_candidates=( $PLUGIN_JAR )
-(( ${#plugin_candidates[@]} == 1 )) || die "Expected exactly one plugin JAR from $PLUGIN_JAR"
-PLUGIN_JAR="${plugin_candidates[0]}"
+velocity_plugin_candidates=( $VELOCITY_PLUGIN_JAR )
+(( ${#velocity_plugin_candidates[@]} == 1 )) || \
+  die "Expected exactly one Velocity plugin JAR from $VELOCITY_PLUGIN_JAR"
+VELOCITY_PLUGIN_JAR="${velocity_plugin_candidates[0]}"
+paper_companion_candidates=( $PAPER_COMPANION_JAR )
+(( ${#paper_companion_candidates[@]} == 1 )) || \
+  die "Expected exactly one Paper companion JAR from $PAPER_COMPANION_JAR"
+PAPER_COMPANION_JAR="${paper_companion_candidates[0]}"
 
 log "Downloading Paper $MINECRAFT_VERSION and Velocity"
 if [[ -n "${PAPER_JAR:-}" ]]; then
@@ -323,12 +355,15 @@ wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
+wait_for_log "$VELOCITY_LOG" \
+  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' 90
 if [[ "$MINECRAFT_VERSION" != "1.16.5" ]]; then
   wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 fi
 
 log "Fault test: interrupt AFK backend, then prove the presence rule restores the bot"
 velocity_log_lines=$(wc -l < "$VELOCITY_LOG")
+policy_replay_log_lines="$velocity_log_lines"
 kill "$AFK_PID"
 wait "$AFK_PID" || true
 sleep 2
@@ -336,10 +371,15 @@ start_paper afk "$AFK_PORT"
 wait_for_log "$WORK_ROOT/afk/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
 wait_for_new_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" "$velocity_log_lines" 90
+wait_for_new_log "$VELOCITY_LOG" \
+  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' "$policy_replay_log_lines" 90
 
 log "Fault test: restart Velocity; enabled bot must return to PLAY"
 restart_velocity
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
+wait_for_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" 90
+wait_for_log "$VELOCITY_LOG" \
+  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' 90
 
 log "Integration passed: Minecraft $MINECRAFT_VERSION / protocol $PROTOCOL_ID"

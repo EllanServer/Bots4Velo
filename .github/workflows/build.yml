@@ -52,7 +52,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Verify protocol mapping
-        run: ./gradlew test --tests dev.nulli0n.vbot.protocol.ProtocolVersionTest -PciProtocol="${{ matrix.protocol }}"
+        # Qualify the root task so Gradle does not propagate this root-only
+        # test filter to backend-protocol or paper-companion.
+        run: ./gradlew :test --tests dev.nulli0n.vbot.protocol.ProtocolVersionTest -PciProtocol="${{ matrix.protocol }}"
 
   integration-network:
     name: Network integration (${{ matrix.minecraft }})

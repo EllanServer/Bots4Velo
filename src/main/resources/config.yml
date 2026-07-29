@@ -27,6 +27,14 @@ runtime:
   resource-pack-step-delay-ms: 150
   resource-pack-mode: "ACCEPT_WITHOUT_DOWNLOAD"
   auto-respawn: true
+  # Enables authenticated requests to the optional Bots4Velo Paper backend
+  # companion. Prefer secret-env; when both are populated the environment
+  # value takes precedence. Keep disabled until every target backend is ready.
+  backend-control:
+    enabled: false
+    secret: ""
+    secret-env: ""
+    timeout-ms: 3000
   reconnect:
     initial-delay-ms: 5000
     maximum-delay-ms: 60000
@@ -112,6 +120,21 @@ bots:
     server-switch-maximum-attempts: 0
     after-login-commands:
       - "res tp ironfarm"
+    # Server-authoritative player properties require the optional Paper
+    # companion above. These safe defaults leave every property unchanged.
+    player-state:
+      invulnerable: "KEEP" # KEEP, ENABLED or DISABLED
+      game-mode: "KEEP" # KEEP, SURVIVAL, CREATIVE, ADVENTURE or SPECTATOR
+      apply-delay-ms: 0
+      respawn-point:
+        # UNCHANGED, CURRENT, FIXED, WORLD_SPAWN or CLEAR.
+        # FIXED additionally requires world and uses the coordinates below.
+        mode: "UNCHANGED"
+        world: ""
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        yaw: 0.0
     behavior:
       # STATIC, FARM, PATROL, COMMAND or FOLLOW. FOLLOW needs a player target
       # supplied at runtime; it remains idle until one is configured.

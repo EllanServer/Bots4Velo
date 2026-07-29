@@ -1,0 +1,24 @@
+# The environment value takes precedence when it exists and is non-empty.
+# Leave the name empty to disable environment lookup.
+shared-secret-env: "BOTS4VELO_BACKEND_SECRET"
+
+# Must match the Velocity-side backend-control secret. This literal is only a
+# fallback when shared-secret-env is missing or empty. Generate at least 32
+# random bytes and either paste them directly or use base64:<encoded-value>.
+# The companion disables itself while neither source supplies a valid secret.
+shared-secret: ""
+
+# Signed requests outside this clock window are rejected. Keep proxy and Paper
+# hosts synchronized with NTP.
+maximum-clock-skew-seconds: 60
+replay-retention-seconds: 300
+maximum-replay-entries: 4096
+maximum-message-bytes: 16384
+
+# In addition to Paper's invulnerable entity flag, cancel Bukkit damage events
+# for bots whose effective policy explicitly enables invulnerability.
+cancel-damage-events: true
+
+# Rejected signatures are never echoed to clients. This setting only controls
+# a rate-limited warning in the Paper console and never logs message contents.
+log-rejected-messages: true

@@ -1,0 +1,6 @@
+name: Bots4VeloPaper
+main: dev.nulli0n.vbot.paper.Bots4VeloPaperPlugin
+version: '${version}'
+api-version: '1.16'
+authors: [OpenAI Codex]
+description: Applies authenticated Bots4Velo backend policies without operator permissions.

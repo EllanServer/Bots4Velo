@@ -151,6 +151,20 @@ public final class ManagedBotStore {
         auth.put("failure-messages", definition.auth().failureMessages());
         auth.put("timeout-ms", definition.auth().timeoutMillis());
 
+        Map<String, Object> respawnPoint = new LinkedHashMap<>();
+        respawnPoint.put("mode", definition.playerState().respawnPoint().mode().name());
+        respawnPoint.put("world", definition.playerState().respawnPoint().world());
+        respawnPoint.put("x", definition.playerState().respawnPoint().x());
+        respawnPoint.put("y", definition.playerState().respawnPoint().y());
+        respawnPoint.put("z", definition.playerState().respawnPoint().z());
+        respawnPoint.put("yaw", definition.playerState().respawnPoint().yaw());
+
+        Map<String, Object> playerState = new LinkedHashMap<>();
+        playerState.put("invulnerable", definition.playerState().invulnerability().name());
+        playerState.put("game-mode", definition.playerState().gameMode().name());
+        playerState.put("apply-delay-ms", definition.playerState().applyDelayMillis());
+        playerState.put("respawn-point", respawnPoint);
+
         Map<String, Object> bot = new LinkedHashMap<>();
         bot.put("enabled", definition.enabled());
         bot.put("username", definition.username());
@@ -165,6 +179,7 @@ public final class ManagedBotStore {
         bot.put("after-login-commands", definition.afterLoginCommands());
         bot.put("display-name", definition.displayName());
         bot.put("tab-group", definition.tabGroup());
+        bot.put("player-state", playerState);
         return bot;
     }
 

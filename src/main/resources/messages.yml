@@ -5,6 +5,8 @@ en_US:
   no-permission: "You do not have permission for /vbot %s."
   help-title: "Bots4Velo Help (%s/2)"
   other-page: "Other page: /vbot help %s"
+  help-title-3: "Bots4Velo Help (%s/3)"
+  other-pages: "Other pages: %s"
   no-matches: "No bots matched selector: %s"
   config-ok: "Config: OK (validation passed without replacing live bots)."
 
@@ -12,5 +14,7 @@ zh_CN:
   no-permission: "你没有执行 /vbot %s 的权限。"
   help-title: "Bots4Velo 帮助（%s/2）"
   other-page: "其他页面：/vbot help %s"
+  help-title-3: "Bots4Velo 帮助（%s/3）"
+  other-pages: "其他页面：%s"
   no-matches: "没有机器人匹配选择器：%s"
   config-ok: "配置：正常（验证完成，未替换正在运行的机器人）。"

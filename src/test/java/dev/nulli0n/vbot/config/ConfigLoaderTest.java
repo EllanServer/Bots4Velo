@@ -32,7 +32,73 @@ class ConfigLoaderTest {
         assertThat(config.bots().get("farm01").protocolDetectionServer()).isBlank();
         assertThat(config.runtime().maximumBots()).isEqualTo(32);
         assertThat(config.runtime().prometheusPort()).isZero();
+        assertThat(config.runtime().backendControl()).isEqualTo(
+            BotPluginConfig.BackendControlConfig.disabled());
         assertThat(config.bots().get("farm01").auth().timeoutMillis()).isEqualTo(30_000L);
+        assertThat(config.bots().get("farm01").playerState()).isEqualTo(
+            BotPluginConfig.PlayerStateConfig.unchanged());
+    }
+
+    @Test
+    void resolvesBackendControlSecretFromEnvironmentBeforeLiteralValue() {
+        BotPluginConfig config = parse("""
+            runtime:
+              backend-control:
+                enabled: true
+                secret: literal-fallback-at-least-32-bytes-long
+                secret-env: BOTS4VELO_TEST_BACKEND_SECRET
+                timeout-ms: 4500
+            bots: {}
+            """, Map.of("BOTS4VELO_TEST_BACKEND_SECRET", "environment-secret-at-least-32-bytes"));
+
+        assertThat(config.runtime().backendControl()).satisfies(control -> {
+            assertThat(control.enabled()).isTrue();
+            assertThat(control.secret()).isEqualTo("environment-secret-at-least-32-bytes");
+            assertThat(control.secretEnv()).isEqualTo("BOTS4VELO_TEST_BACKEND_SECRET");
+            assertThat(control.timeoutMillis()).isEqualTo(4_500L);
+        });
+
+        BotPluginConfig fallback = parse("""
+            runtime:
+              backend-control:
+                enabled: true
+                secret: literal-fallback-at-least-32-bytes-long
+                secret-env: BOTS4VELO_MISSING_BACKEND_SECRET
+            bots: {}
+            """, Map.of());
+        assertThat(fallback.runtime().backendControl().secret())
+            .isEqualTo("literal-fallback-at-least-32-bytes-long");
+    }
+
+    @Test
+    void rejectsEnabledBackendControlWithoutSecretAndInvalidTimeout() {
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              backend-control:
+                enabled: true
+            bots: {}
+            """, Map.of()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("runtime.backend-control");
+
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              backend-control:
+                enabled: true
+                secret: too-short
+            bots: {}
+            """, Map.of()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("at least 32 bytes");
+
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              backend-control:
+                timeout-ms: 100
+            bots: {}
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("timeout-ms");
     }
 
     @Test
@@ -249,6 +315,97 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void inheritsAndOverridesPlayerStateConfiguration() {
+        BotPluginConfig config = parse("""
+            templates:
+              protected-farm:
+                player-state:
+                  invulnerable: ENABLED
+                  game-mode: SURVIVAL
+                  apply-delay-ms: 1250
+                  respawn-point:
+                    mode: FIXED
+                    world: world
+                    x: 10.5
+                    y: 64
+                    z: -20.25
+                    yaw: 90
+            bots:
+              Farm01:
+                template: protected-farm
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  game-mode: CREATIVE
+            """);
+
+        BotPluginConfig.PlayerStateConfig state = config.bots().get("farm01").playerState();
+        assertThat(state.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.ENABLED);
+        assertThat(state.gameMode()).isEqualTo(BotPluginConfig.ManagedGameMode.CREATIVE);
+        assertThat(state.applyDelayMillis()).isEqualTo(1_250L);
+        assertThat(state.respawnPoint()).isEqualTo(new BotPluginConfig.RespawnPointConfig(
+            BotPluginConfig.RespawnPointMode.FIXED, "world", 10.5D, 64.0D, -20.25D, 90.0F));
+    }
+
+    @Test
+    void validatesPlayerStateEnumsAndFixedRespawnPoint() {
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  game-mode: BUILDER
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("player-state.game-mode");
+
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  respawn-point:
+                    mode: FIXED
+                    x: 10
+                    y: 64
+                    z: 10
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("respawn-point.world");
+
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  respawn-point:
+                    mode: FIXED
+                    world: world
+                    x: NaN
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("x must be between");
+    }
+
+    @Test
+    void rejectsDuplicateBotUsernamesIgnoringCase() {
+        assertThatThrownBy(() -> parse("""
+            bots:
+              First:
+                username: AFK_Shared
+                password: secret
+              Second:
+                username: afk_shared
+                password: secret
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("same username ignoring case");
+    }
+
+    @Test
     void rejectsAmbiguousPasswordSources() {
         assertThatThrownBy(() -> parse("""
             bots:
@@ -347,5 +504,9 @@ class ConfigLoaderTest {
 
     private static BotPluginConfig parse(String yaml) {
         return ConfigLoader.parse(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static BotPluginConfig parse(String yaml, Map<String, String> environment) {
+        return ConfigLoader.parse(new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8)), environment);
     }
 }

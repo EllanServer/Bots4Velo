@@ -7,6 +7,7 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import dev.nulli0n.vbot.Bots4VeloPlugin;
 import dev.nulli0n.vbot.Bots4VeloPlugin.BotServerSwitchResult;
+import dev.nulli0n.vbot.backend.BackendControlService;
 import dev.nulli0n.vbot.bot.BotSnapshot;
 import dev.nulli0n.vbot.transport.BotPosition;
 import net.kyori.adventure.text.Component;
@@ -31,15 +32,24 @@ public final class VBotCommand implements SimpleCommand {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final List<String> ACTIONS = List.of(
         "help", "list", "status", "monitor", "history", "doctor", "servers", "server", "movehere",
-        "position", "move", "look", "behavior", "create", "remove", "start", "stop", "reconnect", "command", "reload");
+        "position", "move", "look", "behavior", "invulnerable", "gamemode", "spawnpoint", "respawn",
+        "create", "remove", "start", "stop", "reconnect", "command", "reload");
     private static final List<String> BOT_ID_ACTIONS = List.of(
         "status", "monitor", "history", "server", "movehere", "position", "move", "look", "remove",
-        "start", "stop", "reconnect", "command", "behavior");
+        "start", "stop", "reconnect", "command", "behavior", "invulnerable", "gamemode", "spawnpoint",
+        "respawn");
 
     private final Bots4VeloPlugin plugin;
+    private final PlayerStateCommandHandler playerStateCommands;
 
     public VBotCommand(Bots4VeloPlugin plugin) {
+        this(plugin, BackendControlService.unavailable());
+    }
+
+    public VBotCommand(Bots4VeloPlugin plugin, BackendControlService backendControlService) {
         this.plugin = plugin;
+        this.playerStateCommands = new PlayerStateCommandHandler(backendControlService, selector ->
+            plugin.selectBots(selector).stream().map(session -> session.definition().id()).toList());
     }
 
     @Override
@@ -72,6 +82,8 @@ public final class VBotCommand implements SimpleCommand {
                 case "move" -> move(source, args);
                 case "look" -> look(source, args);
                 case "behavior" -> behavior(source, args);
+                case "invulnerable", "gamemode", "spawnpoint", "respawn" ->
+                    playerState(source, action, args);
                 case "create" -> create(source, args);
                 case "remove" -> remove(source, args);
                 case "start" -> change(source, args, "start", plugin.manager()::start);
@@ -134,6 +146,30 @@ public final class VBotCommand implements SimpleCommand {
             source.sendMessage(Component.text("Auth UI: " + snapshot.authenticationUi()
                 + " | Presented: " + snapshot.authenticationUiPresentations()
                 + " | Submitted: " + snapshot.authenticationUiSubmissions(), NamedTextColor.GRAY));
+            var desired = session.definition().playerState();
+            source.sendMessage(Component.text("Configured Paper state: invulnerable=" + desired.invulnerability()
+                + " | gamemode=" + desired.gameMode() + " | spawnpoint=" + desired.respawnPoint().mode()
+                + " | control=" + (plugin.backendControlEnabled() ? "enabled" : "disabled"),
+                NamedTextColor.GRAY));
+            if (plugin.backendControlEnabled()) {
+                plugin.backendControl().probe(snapshot.id()).whenComplete((result, failure) -> {
+                    if (failure != null || result == null || !result.successful()
+                        || !result.actualState().present()) {
+                        String detail = failure != null ? safeDetail(failure)
+                            : result == null ? "empty acknowledgement"
+                            : result.status() + (result.detail().isBlank() ? "" : " - " + result.detail());
+                        source.sendMessage(Component.text("Actual Paper state unavailable: " + detail,
+                            NamedTextColor.RED));
+                        return;
+                    }
+                    var actual = result.actualState();
+                    source.sendMessage(Component.text("Actual Paper state: invulnerable=" + actual.invulnerable()
+                        + " | gamemode=" + actual.gameMode() + " | spawnpoint="
+                        + actual.respawnPoint().mode()
+                        + (actual.respawnPoint().world().isBlank() ? "" : "@" + actual.respawnPoint().world()),
+                        NamedTextColor.GREEN));
+                });
+            }
         }, () -> unknown(source, args[1]));
     }
 
@@ -176,6 +212,9 @@ public final class VBotCommand implements SimpleCommand {
         source.sendMessage(Component.text("Velocity backends: " + plugin.serverNames().size()
             + " | TAB: " + (tab ? "detected" : "not detected")
             + " | Scoreboard API: " + (scoreboard ? "detected" : "not detected"), NamedTextColor.GRAY));
+        source.sendMessage(Component.text("Paper backend control: "
+            + (plugin.backendControlEnabled() ? "enabled (probing selected bots)" : "disabled"),
+            plugin.backendControlEnabled() ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
         List<dev.nulli0n.vbot.bot.BotSession> sessions = args.length == 2
             ? plugin.selectBots(args[1]) : plugin.selectBots("all");
         if (sessions.isEmpty()) {
@@ -199,6 +238,18 @@ public final class VBotCommand implements SimpleCommand {
                     + (targetKnown ? " OK" : " MISSING")) + ", packs=" + snapshot.resourcePacksLoaded()
                 + ", auth-ui=" + snapshot.authenticationUiPresentations() + "/"
                 + snapshot.authenticationUiSubmissions(), color));
+            if (plugin.backendControlEnabled()) {
+                plugin.backendControl().probe(definition.id()).whenComplete((result, failure) -> {
+                    if (failure != null) {
+                        source.sendMessage(Component.text(definition.id()
+                            + ": Paper control probe failed - " + safeDetail(failure), NamedTextColor.RED));
+                        return;
+                    }
+                    NamedTextColor probeColor = result.successful() ? NamedTextColor.GREEN : NamedTextColor.RED;
+                    source.sendMessage(Component.text(definition.id() + ": Paper control=" + result.status()
+                        + (result.detail().isBlank() ? "" : " - " + result.detail()), probeColor));
+                });
+            }
         }
     }
 
@@ -498,10 +549,27 @@ public final class VBotCommand implements SimpleCommand {
         applySelection(source, args[1], verb, action::apply);
     }
 
+    private void playerState(CommandSource source, String action, String[] args) {
+        playerStateCommands.execute(action, args).thenAccept(reply -> {
+            NamedTextColor color = switch (reply.severity()) {
+                case SUCCESS -> NamedTextColor.GREEN;
+                case WARNING -> NamedTextColor.YELLOW;
+                case ERROR -> NamedTextColor.RED;
+                case USAGE -> NamedTextColor.YELLOW;
+            };
+            reply.lines().forEach(line -> source.sendMessage(Component.text(line, color)));
+        }).exceptionally(failure -> {
+            plugin.logger().error("/vbot {} failed while collecting backend acknowledgements", action, failure);
+            source.sendMessage(Component.text(
+                "Backend control failed while collecting acknowledgements.", NamedTextColor.RED));
+            return null;
+        });
+    }
+
     private void help(CommandSource source, String[] args) {
         int page = 1;
         if (args.length > 2) {
-            source.sendMessage(Component.text("Usage: /vbot help [1|2]", NamedTextColor.YELLOW));
+            source.sendMessage(Component.text("Usage: /vbot help [1|2|3]", NamedTextColor.YELLOW));
             return;
         }
         if (args.length == 2) {
@@ -509,22 +577,22 @@ public final class VBotCommand implements SimpleCommand {
                 page = Integer.parseInt(args[1]);
             }
             catch (NumberFormatException exception) {
-                source.sendMessage(Component.text("The help page must be 1 or 2.", NamedTextColor.RED));
+                source.sendMessage(Component.text("The help page must be 1, 2 or 3.", NamedTextColor.RED));
                 return;
             }
         }
         List<String> lines = helpLines(page);
         if (lines.isEmpty()) {
-            source.sendMessage(Component.text("The help page must be 1 or 2.", NamedTextColor.RED));
+            source.sendMessage(Component.text("The help page must be 1, 2 or 3.", NamedTextColor.RED));
             return;
         }
-        source.sendMessage(Component.text(plugin.messages().text("help-title", "Bots4Velo Help (%s/2)", page),
+        source.sendMessage(Component.text(plugin.messages().text("help-title-3", "Bots4Velo Help (%s/3)", page),
             NamedTextColor.GOLD));
         for (String line : lines) {
             source.sendMessage(Component.text(line, NamedTextColor.YELLOW));
         }
-        source.sendMessage(Component.text(plugin.messages().text("other-page", "Other page: /vbot help %s",
-            page == 1 ? 2 : 1), NamedTextColor.GRAY));
+        source.sendMessage(Component.text(plugin.messages().text("other-pages", "Other pages: %s",
+            otherHelpPages(page)), NamedTextColor.GRAY));
     }
 
     static List<String> helpLines(int page) {
@@ -549,7 +617,22 @@ public final class VBotCommand implements SimpleCommand {
                 "/vbot remove <id> - Remove a managed bot",
                 "/vbot monitor [id] - Output monitoring JSON",
                 "/vbot reload - Reload configuration");
+            case 3 -> List.of(
+                "/vbot invulnerable <selector> <on|off|keep>",
+                "/vbot gamemode <selector> <mode|unchanged>",
+                "/vbot spawnpoint <selector> <mode|set ...>",
+                "/vbot respawn <selector> - Request a backend respawn",
+                "Player-state commands require the Paper companion");
             default -> List.of();
+        };
+    }
+
+    private static String otherHelpPages(int page) {
+        return switch (page) {
+            case 1 -> "/vbot help 2, /vbot help 3";
+            case 2 -> "/vbot help 1, /vbot help 3";
+            case 3 -> "/vbot help 1, /vbot help 2";
+            default -> "-";
         };
     }
 
@@ -591,16 +674,19 @@ public final class VBotCommand implements SimpleCommand {
         if (source.hasPermission(ADMIN_PERMISSION)) {
             return true;
         }
-        String permission = switch (action) {
+        return source.hasPermission(permissionFor(action));
+    }
+
+    static String permissionFor(String action) {
+        return switch (action) {
             case "help", "list", "status", "monitor", "history", "doctor", "servers", "position" -> VIEW_PERMISSION;
             case "create", "remove" -> CREATE_PERMISSION;
             case "reload" -> RELOAD_PERMISSION;
             default -> CONTROL_PERMISSION;
         };
-        return source.hasPermission(permission);
     }
 
-    private static String safeDetail(Exception exception) {
+    private static String safeDetail(Throwable exception) {
         String detail = exception.getMessage();
         return detail == null || detail.isBlank() ? exception.getClass().getSimpleName() : detail;
     }
@@ -634,6 +720,17 @@ public final class VBotCommand implements SimpleCommand {
         result.put("recentEvents", snapshot.recentEvents().stream().map(event -> Map.of(
             "at", event.at().toString(), "type", event.type(), "detail", event.detail())).toList());
         result.put("behavior", behaviorMap(snapshot.behavior()));
+        plugin.manager().find(snapshot.id()).ifPresent(session -> {
+            var state = session.definition().playerState();
+            Map<String, Object> configured = new LinkedHashMap<>();
+            configured.put("invulnerable", state.invulnerability().name());
+            configured.put("gameMode", state.gameMode().name());
+            configured.put("applyDelayMillis", state.applyDelayMillis());
+            configured.put("respawnMode", state.respawnPoint().mode().name());
+            configured.put("respawnWorld", state.respawnPoint().world());
+            result.put("configuredPlayerState", configured);
+        });
+        result.put("backendControlEnabled", plugin.backendControlEnabled());
         return result;
     }
 
@@ -705,7 +802,7 @@ public final class VBotCommand implements SimpleCommand {
                 .filter(id -> id.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("help")) {
-            return List.of("1", "2").stream().filter(page -> page.startsWith(args[1])).toList();
+            return List.of("1", "2", "3").stream().filter(page -> page.startsWith(args[1])).toList();
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("server")) {
             String prefix = args[2].toLowerCase(Locale.ROOT);
@@ -721,7 +818,21 @@ public final class VBotCommand implements SimpleCommand {
             return List.of("start", "pause", "status", "follow", "unfollow").stream()
                 .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
         }
+        if (args.length == 3 && args[0].equalsIgnoreCase("invulnerable")) {
+            return matching(args[2], "on", "off", "keep");
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("gamemode")) {
+            return matching(args[2], "survival", "creative", "adventure", "spectator", "unchanged");
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("spawnpoint")) {
+            return matching(args[2], "current", "worldspawn", "clear", "set");
+        }
         return List.of();
+    }
+
+    private static List<String> matching(String prefix, String... values) {
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return Arrays.stream(values).filter(value -> value.startsWith(normalized)).toList();
     }
 
     private List<String> selectorSuggestions() {
