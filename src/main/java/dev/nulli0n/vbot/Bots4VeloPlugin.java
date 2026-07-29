@@ -601,9 +601,9 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         }
         for (BotSession session : targets) {
             switch (action.action()) {
-                case "start" -> manager().start(session.definition().id());
+                case "start" -> manager().startAutomatically(session.definition().id());
                 case "stop" -> manager().stop(session.definition().id());
-                case "reconnect" -> manager().reconnect(session.definition().id());
+                case "reconnect" -> manager().reconnectAutomatically(session.definition().id());
                 case "server" -> switchBotServer(session.definition().id(), action.server());
                 default -> logger.warn("Ignoring unknown scheduled action {}", action.action());
             }
@@ -712,7 +712,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         for (int index = 0; index < candidates.size(); index++) {
             BotSession session = candidates.get(index);
             if (index < desired) {
-                manager().start(session.definition().id());
+                manager().startAutomatically(session.definition().id());
                 switchBotServer(session.definition().id(), backend.getServerInfo().getName());
             }
             else {

@@ -101,7 +101,7 @@ public final class ManagedBotStore {
             1_500,
             List.of("(?i)(please login|/login|请登录|请输入密码)"),
             List.of("(?i)(please register|/register|请注册)"),
-            List.of("(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|^authenticated$|登录成功|注册成功|认证成功)")
+            List.of("(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|logged-in due to session reconnection|login session continued|already logged in|^authenticated$|登录成功|注册成功|认证成功)")
         );
         return new BotDefinition(
             trimmedId, true, trimmedUsername, trimmedPassword, trimmedTarget, trimmedTarget, 2, auth,
@@ -150,6 +150,12 @@ public final class ManagedBotStore {
         auth.put("success-messages", definition.auth().successMessages());
         auth.put("failure-messages", definition.auth().failureMessages());
         auth.put("timeout-ms", definition.auth().timeoutMillis());
+        Map<String, Object> authMeUi = new LinkedHashMap<>();
+        authMeUi.put("accept-rules", definition.auth().acceptRules());
+        authMeUi.put("registration-email", definition.auth().registrationEmail());
+        authMeUi.put("registration-second-argument", definition.auth().registrationSecondArgument().name());
+        authMeUi.put("ui-detection-grace-ms", definition.auth().uiDetectionGraceMillis());
+        auth.put("authmeui", authMeUi);
 
         Map<String, Object> respawnPoint = new LinkedHashMap<>();
         respawnPoint.put("mode", definition.playerState().respawnPoint().mode().name());

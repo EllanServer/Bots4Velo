@@ -1,7 +1,8 @@
 package dev.nulli0n.vbot.transport;
 
-/** Authentication form presented before the client enters the PLAY state. */
+/** Authentication stage presented during either CONFIGURATION or PLAY. */
 public enum AuthenticationUiType {
     LOGIN,
-    REGISTER
+    REGISTER,
+    RULES
 }

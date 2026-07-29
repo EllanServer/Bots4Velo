@@ -248,7 +248,7 @@ public final class VBotCommand implements SimpleCommand {
                 + (definition.targetServer().isBlank() ? "none" : definition.targetServer()
                     + (targetKnown ? " OK" : " MISSING")) + ", packs=" + snapshot.resourcePacksLoaded()
                 + ", auth-ui=" + snapshot.authenticationUiPresentations() + "/"
-                + snapshot.authenticationUiSubmissions(), color));
+                + snapshot.authenticationUiSubmissions() + " (last=" + snapshot.authenticationUi() + ")", color));
             if (plugin.backendControlEnabled()) {
                 plugin.backendControl().probe(definition.id()).whenComplete((result, failure) -> {
                     if (failure != null) {

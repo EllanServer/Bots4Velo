@@ -36,8 +36,30 @@ class ConfigLoaderTest {
         assertThat(config.runtime().backendControl()).isEqualTo(
             BotPluginConfig.BackendControlConfig.disabled());
         assertThat(config.bots().get("farm01").auth().timeoutMillis()).isEqualTo(30_000L);
+        assertThat(config.bots().get("farm01").auth().acceptRules()).isTrue();
+        assertThat(config.bots().get("farm01").auth().registrationEmail()).isBlank();
+        assertThat(config.bots().get("farm01").auth().registrationSecondArgument())
+            .isEqualTo(BotPluginConfig.RegistrationSecondArgument.AUTO);
+        assertThat(config.bots().get("farm01").auth().uiDetectionGraceMillis()).isEqualTo(3_000L);
+        assertThat(config.bots().get("farm01").auth().successMessages()).anySatisfy(expression ->
+            assertThat(java.util.regex.Pattern.compile(expression)
+                .matcher("Logged-in due to Session Reconnection.").find()).isTrue());
         assertThat(config.bots().get("farm01").playerState()).isEqualTo(
             BotPluginConfig.PlayerStateConfig.unchanged());
+    }
+
+    @Test
+    void preservesAnExplicitlyEmptyAuthenticationSuccessMessageList() {
+        BotPluginConfig config = parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  success-messages: []
+            """);
+
+        assertThat(config.bots().get("farm01").auth().successMessages()).isEmpty();
     }
 
     @Test
@@ -124,6 +146,75 @@ class ConfigLoaderTest {
             """))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("timeout-ms");
+    }
+
+    @Test
+    void parsesAuthMeUiConsentAndRegistrationEmail() {
+        BotPluginConfig config = parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  mode: REGISTER
+                  authmeui:
+                    accept-rules: false
+                    registration-email: bot@example.test
+                    registration-second-argument: EMAIL_MANDATORY
+                    ui-detection-grace-ms: 7500
+            """);
+
+        assertThat(config.bots().get("farm01").auth()).satisfies(auth -> {
+            assertThat(auth.acceptRules()).isFalse();
+            assertThat(auth.registrationEmail()).isEqualTo("bot@example.test");
+            assertThat(auth.registrationSecondArgument())
+                .isEqualTo(BotPluginConfig.RegistrationSecondArgument.EMAIL_MANDATORY);
+            assertThat(auth.uiDetectionGraceMillis()).isEqualTo(7_500L);
+        });
+    }
+
+    @Test
+    void rejectsUnknownAuthMeUiRegistrationSecondArgument() {
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  authmeui:
+                    registration-second-argument: PASSWORD_AND_CAPTCHA
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("registration-second-argument");
+    }
+
+    @Test
+    void validatesAuthMeUiDetectionGraceRange() {
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                auth:
+                  authmeui:
+                    ui-detection-grace-ms: 60001
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("ui-detection-grace-ms");
+    }
+
+    @Test
+    void keepsPreAuthMeUiAuthConfigConstructorSourceCompatible() {
+        BotPluginConfig.AuthConfig auth = new BotPluginConfig.AuthConfig(
+            BotPluginConfig.AuthMode.AUTO, "login {password}", "register {password} {password}",
+            1_000L, 2_500L, 1_500L, java.util.List.of(), java.util.List.of(),
+            java.util.List.of(), java.util.List.of(), 30_000L);
+
+        assertThat(auth.acceptRules()).isTrue();
+        assertThat(auth.registrationEmail()).isBlank();
+        assertThat(auth.registrationSecondArgument())
+            .isEqualTo(BotPluginConfig.RegistrationSecondArgument.AUTO);
+        assertThat(auth.uiDetectionGraceMillis()).isEqualTo(3_000L);
     }
 
     @Test
@@ -251,11 +342,18 @@ class ConfigLoaderTest {
                 auth:
                   mode: LOGIN
                   login-command: login {password}
+                  authmeui:
+                    accept-rules: true
+                    registration-second-argument: EMAIL_OPTIONAL
+                    ui-detection-grace-ms: 4200
             bots:
               Farm01:
                 template: farm-auth
                 username: AFK_Farm01
                 password-secret: farm01
+                auth:
+                  authmeui:
+                    accept-rules: false
             """);
         Files.writeString(directory.resolve("secrets.yml"), """
             passwords:
@@ -272,6 +370,10 @@ class ConfigLoaderTest {
         assertThat(bot.templateName()).isEqualTo("farm-auth");
         assertThat(bot.displayName()).isEqualTo("&eFarm Bot");
         assertThat(bot.tabGroup()).isEqualTo("farm-bots");
+        assertThat(bot.auth().acceptRules()).isFalse();
+        assertThat(bot.auth().registrationSecondArgument())
+            .isEqualTo(BotPluginConfig.RegistrationSecondArgument.EMAIL_OPTIONAL);
+        assertThat(bot.auth().uiDetectionGraceMillis()).isEqualTo(4_200L);
     }
 
     @Test
@@ -415,6 +517,17 @@ class ConfigLoaderTest {
             .replace("password-secret: \"iron-farm-01\"", "password: \"secret\""));
 
         BotPluginConfig.PlayerStateConfig farm = config.bots().get("ironfarm01").playerState();
+        assertThat(config.bots().get("ironfarm01").auth()).satisfies(auth -> {
+            assertThat(auth.acceptRules()).isTrue();
+            assertThat(auth.registrationEmail()).isBlank();
+            assertThat(auth.registrationSecondArgument())
+                .isEqualTo(BotPluginConfig.RegistrationSecondArgument.AUTO);
+            assertThat(auth.uiDetectionGraceMillis()).isEqualTo(3_000L);
+            assertThat(auth.successMessages()).anySatisfy(expression ->
+                assertThat(java.util.regex.Pattern.compile(expression)
+                    .matcher("Logged-in due to Session Reconnection.").find())
+                    .isTrue());
+        });
         assertThat(farm.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.FARM);
         assertThat(farm.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.ENABLED);
         assertThat(farm.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);

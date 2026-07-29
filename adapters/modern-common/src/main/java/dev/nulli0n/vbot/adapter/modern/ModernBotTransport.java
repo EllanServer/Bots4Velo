@@ -1,6 +1,8 @@
 package dev.nulli0n.vbot.adapter.modern;
 
 import dev.nulli0n.vbot.transport.AuthenticationUiChallenge;
+import dev.nulli0n.vbot.transport.AuthenticationUiInputPurpose;
+import dev.nulli0n.vbot.transport.AuthenticationUiProvider;
 import dev.nulli0n.vbot.transport.AuthenticationUiType;
 import dev.nulli0n.vbot.transport.BotPosition;
 import dev.nulli0n.vbot.transport.BotTransport;
@@ -55,10 +57,11 @@ import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundL
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -69,6 +72,27 @@ final class ModernBotTransport implements BotTransport {
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final String AUTHME_LOGIN_ACTION = "authme:prejoin-login/submit";
     private static final String AUTHME_REGISTER_ACTION = "authme:prejoin-register/submit";
+    private static final String AUTHME_UI_LOGIN_ACTION = "authmeui:action/login";
+    private static final String AUTHME_UI_REGISTER_ACTION = "authmeui:action/register";
+    private static final String AUTHME_UI_RULES_ACTION = "authmeui:action/rules_confirm";
+    private static final Map<String, CommandTemplateSpec> AUTHME_POST_JOIN_COMMANDS = Map.of(
+        "login $(password)", new CommandTemplateSpec(AuthenticationUiType.LOGIN, Set.of("password")),
+        "register $(password)", new CommandTemplateSpec(AuthenticationUiType.REGISTER, Set.of("password")),
+        "register $(password) $(confirm)",
+            new CommandTemplateSpec(AuthenticationUiType.REGISTER, Set.of("password", "confirm")),
+        "register $(password) $(email)",
+            new CommandTemplateSpec(AuthenticationUiType.REGISTER, Set.of("password", "email")),
+        "register $(email)", new CommandTemplateSpec(AuthenticationUiType.REGISTER, Set.of("email")),
+        "register $(email) $(confirm)",
+            new CommandTemplateSpec(AuthenticationUiType.REGISTER, Set.of("email", "confirm"))
+    );
+    private static final Map<String, RecognizedAction> AUTHENTICATION_ACTIONS = Map.of(
+        AUTHME_LOGIN_ACTION, new RecognizedAction(AuthenticationUiType.LOGIN, AuthenticationUiProvider.AUTHME),
+        AUTHME_REGISTER_ACTION, new RecognizedAction(AuthenticationUiType.REGISTER, AuthenticationUiProvider.AUTHME),
+        AUTHME_UI_LOGIN_ACTION, new RecognizedAction(AuthenticationUiType.LOGIN, AuthenticationUiProvider.AUTHME_UI),
+        AUTHME_UI_REGISTER_ACTION, new RecognizedAction(AuthenticationUiType.REGISTER, AuthenticationUiProvider.AUTHME_UI),
+        AUTHME_UI_RULES_ACTION, new RecognizedAction(AuthenticationUiType.RULES, AuthenticationUiProvider.AUTHME_UI)
+    );
 
     private final TransportConfig config;
     private final TransportListener listener;
@@ -135,19 +159,72 @@ final class ModernBotTransport implements BotTransport {
 
     @Override
     public boolean submitAuthenticationUi(AuthenticationUiChallenge challenge, String password) {
+        return submitAuthenticationUi(challenge, password, null);
+    }
+
+    @Override
+    public boolean submitAuthenticationUi(
+        AuthenticationUiChallenge challenge,
+        String password,
+        String registrationEmail
+    ) {
+        RecognizedAction recognized = challenge == null
+            ? null
+            : AUTHENTICATION_ACTIONS.get(challenge.actionId());
+        if (recognized == null || recognized.type() != challenge.type()
+            || recognized.provider() != challenge.provider()) {
+            listener.onDiagnostic("Refused an unrecognized authentication dialog action");
+            return false;
+        }
         ClientSession active = session;
-        if (active == null || !active.isConnected() || state.get() != TransportState.CONFIGURATION) {
+        TransportState currentState = state.get();
+        if (active == null || !active.isConnected()
+            || (currentState != TransportState.CONFIGURATION && currentState != TransportState.PLAY)) {
             return false;
         }
         String safePassword = password == null ? "" : password;
-        var payload = NbtMap.builder().putString(challenge.passwordInput(), safePassword);
-        if (challenge.type() == AuthenticationUiType.REGISTER
-            && challenge.confirmationInput() != null && !challenge.confirmationInput().isBlank()) {
-            payload.putString(challenge.confirmationInput(), safePassword);
-        }
-        active.send(new ServerboundCustomClickActionPacket(Key.key(challenge.actionId()), payload.build()));
+        String safeEmail = registrationEmail == null ? "" : registrationEmail;
+        NbtMap payload = authenticationPayload(challenge, safePassword, safeEmail);
+        active.send(new ServerboundCustomClickActionPacket(Key.key(challenge.actionId()), payload));
         listener.onDiagnostic("Submitted " + challenge.description());
         return true;
+    }
+
+    static NbtMap authenticationPayload(
+        AuthenticationUiChallenge challenge,
+        String password,
+        String registrationEmail
+    ) {
+        String safePassword = password == null ? "" : password;
+        String safeEmail = registrationEmail == null ? "" : registrationEmail;
+        var payload = NbtMap.builder();
+        if (challenge.type() == AuthenticationUiType.LOGIN) {
+            putStringIfPresent(payload, challenge.passwordInput(), safePassword);
+        }
+        else if (challenge.type() == AuthenticationUiType.REGISTER) {
+            putStringIfPresent(payload, challenge.passwordInput(), safePassword);
+            if (challenge.secondaryInputPurpose() == AuthenticationUiInputPurpose.CONFIRMATION) {
+                putStringIfPresent(payload, challenge.secondaryInput(), safePassword);
+            }
+            else if (challenge.secondaryInputPurpose() == AuthenticationUiInputPurpose.EMAIL) {
+                putStringIfPresent(payload, challenge.secondaryInput(), safeEmail);
+            }
+        }
+        else if (challenge.type() == AuthenticationUiType.RULES
+            && isSafeInputKey(challenge.agreementInput())) {
+            payload.putBoolean(challenge.agreementInput(), true);
+        }
+        return payload.build();
+    }
+
+    private static void putStringIfPresent(
+        org.cloudburstmc.nbt.NbtMapBuilder payload,
+        String key,
+        String value
+    ) {
+        if (isSafeInputKey(key)) {
+            payload.putString(key, value);
+        }
     }
 
     @Override
@@ -252,13 +329,10 @@ final class ModernBotTransport implements BotTransport {
             source.send(new ServerboundCookieResponsePacket(cookie.getKey(), null));
         }
         else if (packet instanceof ClientboundShowDialogConfigurationPacket dialog) {
-            handleConfigurationDialog(dialog.getDialog());
+            handleAuthenticationDialog(dialog.getDialog());
         }
         else if (packet instanceof ClientboundShowDialogGamePacket dialog && dialog.getDialog().isCustom()) {
-            // Post-join AuthMe dialogs use a command-template action. Forwarding
-            // the NBT text lets the normal /login and /register prompt matching
-            // respond without coupling the transport to Paper internals.
-            listener.onSystemMessage(dialog.getDialog().custom().toString());
+            handleAuthenticationDialog(dialog.getDialog().custom());
         }
         else if (packet instanceof ClientboundResourcePackPushPacket resourcePack) {
             handleResourcePack(source, resourcePack);
@@ -281,103 +355,374 @@ final class ModernBotTransport implements BotTransport {
         }
     }
 
-    private void handleConfigurationDialog(NbtMap dialog) {
+    void handleAuthenticationDialog(NbtMap dialog) {
         AuthenticationUiChallenge challenge = parseAuthenticationUi(dialog);
         if (challenge != null) {
             listener.onAuthenticationUi(challenge);
+            return;
+        }
+        AuthenticationUiType commandType = parseAuthenticationCommandUi(dialog);
+        if (commandType != null) {
+            listener.onAuthenticationCommandUi(commandType);
         }
         else {
-            listener.onDiagnostic("Ignored a configuration dialog without a recognizable password action");
+            listener.onDiagnostic("Ignored a dialog without a recognized AuthMe/AuthMeUI submit action");
         }
     }
 
     static AuthenticationUiChallenge parseAuthenticationUi(NbtMap dialog) {
-        List<String> tokens = new ArrayList<>();
-        collectDialogStrings(dialog, tokens);
-        String combined = String.join("\n", tokens).toLowerCase(Locale.ROOT);
-        AuthenticationUiType type;
-        if (combined.contains("register") || combined.contains("sign_up") || combined.contains("signup")) {
-            type = AuthenticationUiType.REGISTER;
-        }
-        else if (combined.contains("login") || combined.contains("log_in") || combined.contains("signin")) {
-            type = AuthenticationUiType.LOGIN;
-        }
-        else {
+        AuthenticationActionScan scan = scanAuthenticationActions(dialog);
+        if (scan.totalPrimaryActions() != 1 || scan.customActionIds().size() != 1) {
             return null;
         }
+        String actionId = scan.customActionIds().getFirst();
+        RecognizedAction action = AUTHENTICATION_ACTIONS.get(actionId);
 
-        String action = tokens.stream()
-            .filter(ModernBotTransport::isPossibleActionId)
-            .max(Comparator.comparingInt(value -> actionScore(value, type)))
-            .filter(value -> actionScore(value, type) > 0)
-            .orElse(type == AuthenticationUiType.REGISTER ? AUTHME_REGISTER_ACTION : AUTHME_LOGIN_ACTION);
-        String passwordInput = findInput(tokens, false);
-        String confirmationInput = type == AuthenticationUiType.REGISTER ? findInput(tokens, true) : null;
+        List<DialogInputField> inputs = scan.inputs();
+        String passwordInput = findPasswordInput(inputs);
+        SecondaryInput secondary = action.type() == AuthenticationUiType.REGISTER
+            ? findSecondaryInput(inputs)
+            : SecondaryInput.none();
+        String agreementInput = action.type() == AuthenticationUiType.RULES
+            ? findAgreementInput(inputs)
+            : null;
         return new AuthenticationUiChallenge(
-            type,
-            action,
-            passwordInput == null ? "password" : passwordInput,
-            type == AuthenticationUiType.REGISTER
-                ? (confirmationInput == null ? "confirm" : confirmationInput)
-                : null
+            action.type(),
+            action.provider(),
+            actionId,
+            passwordInput,
+            secondary.key(),
+            secondary.purpose(),
+            agreementInput
         );
     }
 
-    private static void collectDialogStrings(Object value, List<String> target) {
-        if (value instanceof String text) {
-            target.add(text);
+    static AuthenticationUiType parseAuthenticationCommandUi(NbtMap dialog) {
+        AuthenticationActionScan scan = scanAuthenticationActions(dialog);
+        if (scan.totalPrimaryActions() != 1 || scan.commandActions().size() != 1) {
+            return null;
         }
-        else if (value instanceof Map<?, ?> map) {
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (entry.getKey() instanceof String key) {
-                    target.add(key);
+        CommandActionCandidate candidate = scan.commandActions().getFirst();
+        return candidate.inputsDeclared() ? candidate.type() : null;
+    }
+
+    static String nonSensitiveDialogText(NbtMap dialog) {
+        List<String> text = new ArrayList<>();
+        collectNonSensitiveText(dialog, null, text);
+        return String.join("\n", new LinkedHashSet<>(text));
+    }
+
+    private static AuthenticationActionScan scanAuthenticationActions(NbtMap dialog) {
+        DialogStructure structure = dialogStructure(dialog);
+        if (structure == null) {
+            return AuthenticationActionScan.empty();
+        }
+        List<DialogInputField> inputs = collectDialogInputs(structure.inputs());
+        Set<String> declaredInputKeys = new LinkedHashSet<>();
+        inputs.forEach(input -> declaredInputKeys.add(input.key()));
+
+        List<String> customActionIds = new ArrayList<>();
+        List<CommandActionCandidate> commandActions = new ArrayList<>();
+        for (Object button : structure.actions()) {
+            if (!(button instanceof Map<?, ?> buttonMap)
+                || !(buttonMap.get("action") instanceof Map<?, ?> actionMap)) {
+                continue;
+            }
+            String actionType = stringEntry(actionMap, "type");
+            if (isCustomActionType(actionType)) {
+                String actionId = stringEntry(actionMap, "id");
+                if (actionId != null && AUTHENTICATION_ACTIONS.containsKey(actionId)) {
+                    customActionIds.add(actionId);
                 }
-                collectDialogStrings(entry.getValue(), target);
+                continue;
+            }
+            if (isRunCommandActionType(actionType)) {
+                String template = stringEntry(actionMap, "template");
+                CommandTemplateSpec spec = template == null ? null : AUTHME_POST_JOIN_COMMANDS.get(template);
+                if (spec != null) {
+                    commandActions.add(new CommandActionCandidate(
+                        spec.type(), declaredInputKeys.containsAll(spec.requiredInputs())
+                    ));
+                }
             }
         }
-        else if (value instanceof Collection<?> collection) {
-            collection.forEach(entry -> collectDialogStrings(entry, target));
+        return new AuthenticationActionScan(customActionIds, commandActions, inputs);
+    }
+
+    private static DialogStructure dialogStructure(NbtMap dialog) {
+        if (dialog == null || !isMultiActionDialogType(stringEntry(dialog, "type"))) {
+            return null;
         }
+        Object actionValue = dialog.get("actions");
+        if (!(actionValue instanceof Collection<?> actions)) {
+            return null;
+        }
+        Object inputValue = dialog.get("inputs");
+        if (inputValue == null) {
+            return new DialogStructure(actions, List.of());
+        }
+        return inputValue instanceof Collection<?> inputs
+            ? new DialogStructure(actions, inputs)
+            : null;
     }
 
-    private static boolean isPossibleActionId(String value) {
-        String lower = value.toLowerCase(Locale.ROOT);
-        return lower.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")
-            && (lower.contains("submit") || lower.contains("auth") || lower.contains("login")
-                || lower.contains("register") || lower.contains("signin") || lower.contains("signup"));
+    private static boolean isMultiActionDialogType(String value) {
+        return "multi_action".equals(value) || "minecraft:multi_action".equals(value);
     }
 
-    private static int actionScore(String value, AuthenticationUiType type) {
-        String lower = value.toLowerCase(Locale.ROOT);
-        String typeWord = type == AuthenticationUiType.REGISTER ? "register" : "login";
-        int score = lower.contains("submit") ? 8 : 0;
-        score += lower.contains(typeWord) ? 4 : 0;
-        score += lower.contains("auth") ? 2 : 0;
+    private static boolean isCustomActionType(String value) {
+        return "dynamic/custom".equals(value) || "minecraft:dynamic/custom".equals(value);
+    }
+
+    private static boolean isRunCommandActionType(String value) {
+        return "dynamic/run_command".equals(value)
+            || "minecraft:dynamic/run_command".equals(value);
+    }
+
+    private static List<DialogInputField> collectDialogInputs(Collection<?> values) {
+        List<DialogInputField> target = new ArrayList<>();
+        for (Object value : values) {
+            if (value instanceof Map<?, ?> map) {
+                DialogInputKind kind = inputKind(stringEntry(map, "type"));
+                if (kind == DialogInputKind.UNKNOWN) {
+                    continue;
+                }
+                String key = stringEntry(map, "key");
+                if (isSafeInputKey(key)) {
+                    target.add(new DialogInputField(kind, key, inputLabel(map)));
+                }
+            }
+        }
+        return target;
+    }
+
+    private static DialogInputKind inputKind(String type) {
+        if (type == null) {
+            return DialogInputKind.UNKNOWN;
+        }
+        return switch (type) {
+            case "text", "minecraft:text" -> DialogInputKind.TEXT;
+            case "boolean", "minecraft:boolean" -> DialogInputKind.BOOLEAN;
+            default -> DialogInputKind.UNKNOWN;
+        };
+    }
+
+    private static String findPasswordInput(List<DialogInputField> inputs) {
+        DialogInputField best = null;
+        int bestScore = 0;
+        for (DialogInputField input : inputs) {
+            if (input.kind() != DialogInputKind.TEXT) {
+                continue;
+            }
+            int score = passwordScore(input.key());
+            if (score > bestScore) {
+                best = input;
+                bestScore = score;
+            }
+        }
+        return best == null ? null : best.key();
+    }
+
+    private static int passwordScore(String key) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        if (lower.contains("confirm") || lower.contains("repeat") || lower.contains("email")
+            || lower.contains("mail")) {
+            return 0;
+        }
+        if (lower.equals("password")) {
+            return 100;
+        }
+        if (lower.equals("pass") || lower.equals("pwd")) {
+            return 90;
+        }
+        return lower.contains("password") || lower.contains("passwd") ? 50 : 0;
+    }
+
+    private static SecondaryInput findSecondaryInput(List<DialogInputField> inputs) {
+        DialogInputField bestEmail = null;
+        int bestEmailScore = 0;
+        DialogInputField bestConfirmation = null;
+        int bestConfirmationScore = 0;
+        for (DialogInputField input : inputs) {
+            if (input.kind() != DialogInputKind.TEXT || passwordScore(input.key()) > 0) {
+                continue;
+            }
+            int emailScore = emailScore(input);
+            if (emailScore > bestEmailScore) {
+                bestEmail = input;
+                bestEmailScore = emailScore;
+            }
+            int confirmationScore = confirmationScore(input);
+            if (confirmationScore > bestConfirmationScore) {
+                bestConfirmation = input;
+                bestConfirmationScore = confirmationScore;
+            }
+        }
+        if (bestEmail != null) {
+            return new SecondaryInput(bestEmail.key(), AuthenticationUiInputPurpose.EMAIL);
+        }
+        if (bestConfirmation != null) {
+            return new SecondaryInput(bestConfirmation.key(), AuthenticationUiInputPurpose.CONFIRMATION);
+        }
+        return SecondaryInput.none();
+    }
+
+    private static int emailScore(DialogInputField input) {
+        String key = input.key().toLowerCase(Locale.ROOT);
+        String label = input.label().toLowerCase(Locale.ROOT);
+        int score = key.equals("email") || key.equals("e_mail") || key.equals("e-mail") ? 100 : 0;
+        if (score == 0 && (key.contains("email") || key.contains("mail"))) {
+            score = 80;
+        }
+        if (containsEmailHint(label)) {
+            score += 60;
+        }
         return score;
     }
 
-    private static String findInput(List<String> tokens, boolean confirmation) {
-        return tokens.stream()
-            .filter(value -> value.equals(value.toLowerCase(Locale.ROOT)))
-            .filter(value -> value.matches("[a-z0-9_.-]{1,64}"))
-            .filter(value -> inputScore(value, confirmation) > 0)
-            .max(Comparator.comparingInt(value -> inputScore(value, confirmation)))
-            .orElse(null);
+    private static boolean containsEmailHint(String value) {
+        return value.contains("email") || value.contains("e-mail") || value.contains("e mail")
+            || value.contains("mail address") || value.contains("邮箱") || value.contains("郵箱")
+            || value.contains("电子邮件") || value.contains("電子郵件") || value.contains("correo")
+            || value.contains("courriel");
     }
 
-    private static int inputScore(String value, boolean confirmation) {
-        String lower = value.toLowerCase(Locale.ROOT);
-        if (confirmation) {
-            if (lower.equals("confirm") || lower.equals("password_confirmation")) {
-                return 10;
+    private static int confirmationScore(DialogInputField input) {
+        String key = input.key().toLowerCase(Locale.ROOT);
+        String label = input.label().toLowerCase(Locale.ROOT);
+        if (key.equals("confirm") || key.equals("confirmation") || key.equals("password_confirmation")) {
+            return 100;
+        }
+        if (key.contains("confirm") || key.contains("repeat")) {
+            return 70;
+        }
+        return label.contains("confirm") || label.contains("repeat") || label.contains("again")
+            || label.contains("确认") || label.contains("確認") || label.contains("重复")
+            || label.contains("重複") ? 40 : 0;
+    }
+
+    private static String findAgreementInput(List<DialogInputField> inputs) {
+        DialogInputField best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (DialogInputField input : inputs) {
+            if (input.kind() != DialogInputKind.BOOLEAN) {
+                continue;
             }
-            return lower.contains("confirm") || lower.contains("repeat") ? 5 : 0;
+            String searchable = (input.key() + " " + input.label()).toLowerCase(Locale.ROOT);
+            int score = searchable.contains("agree") || searchable.contains("accept")
+                || searchable.contains("rule") || searchable.contains("同意") || searchable.contains("接受")
+                ? 10 : 0;
+            if (best == null || score > bestScore) {
+                best = input;
+                bestScore = score;
+            }
         }
-        if (lower.equals("password")) {
-            return 10;
+        return best == null ? null : best.key();
+    }
+
+    private static String inputLabel(Map<?, ?> map) {
+        Object label = map.get("label");
+        if (label == null) {
+            return "";
         }
-        return (lower.contains("password") || lower.equals("pass"))
-            && !lower.contains("confirm") && !lower.contains("repeat") ? 5 : 0;
+        List<String> values = new ArrayList<>();
+        collectNonSensitiveText(label, "label", values);
+        return String.join(" ", values);
+    }
+
+    private static String stringEntry(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        return value instanceof String text ? text : null;
+    }
+
+    private static boolean isSafeInputKey(String value) {
+        return value != null && value.matches("[A-Za-z0-9_]{1,64}");
+    }
+
+    private static void collectNonSensitiveText(Object value, String parentKey, List<String> target) {
+        if (value instanceof String text) {
+            String trimmed = text.strip();
+            if (!trimmed.isEmpty() && isReadableDialogText(parentKey, trimmed)) {
+                target.add(trimmed);
+            }
+        }
+        else if (value instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key) || isSensitiveDialogBranch(key)) {
+                    continue;
+                }
+                collectNonSensitiveText(entry.getValue(), key, target);
+            }
+        }
+        else if (value instanceof Collection<?> collection) {
+            collection.forEach(entry -> collectNonSensitiveText(entry, parentKey, target));
+        }
+    }
+
+    private static boolean isSensitiveDialogBranch(String key) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        return lower.equals("action") || lower.equals("click_event") || lower.equals("click-event")
+            || lower.equals("on_click") || lower.equals("initial") || lower.equals("default")
+            || lower.equals("value") || lower.equals("template");
+    }
+
+    private static boolean isReadableDialogText(String parentKey, String value) {
+        String key = parentKey == null ? "" : parentKey.toLowerCase(Locale.ROOT);
+        if (key.equals("type") || key.equals("key") || key.equals("id") || key.equals("name")) {
+            return false;
+        }
+        return !value.startsWith("authme:") && !value.startsWith("authmeui:")
+            && !value.startsWith("minecraft:") && !value.startsWith("dynamic/");
+    }
+
+    private record RecognizedAction(AuthenticationUiType type, AuthenticationUiProvider provider) {
+    }
+
+    private record CommandTemplateSpec(AuthenticationUiType type, Set<String> requiredInputs) {
+        private CommandTemplateSpec {
+            requiredInputs = Set.copyOf(requiredInputs);
+        }
+    }
+
+    private record CommandActionCandidate(AuthenticationUiType type, boolean inputsDeclared) {
+    }
+
+    private record DialogStructure(Collection<?> actions, Collection<?> inputs) {
+    }
+
+    private record AuthenticationActionScan(
+        List<String> customActionIds,
+        List<CommandActionCandidate> commandActions,
+        List<DialogInputField> inputs
+    ) {
+        private AuthenticationActionScan {
+            customActionIds = List.copyOf(customActionIds);
+            commandActions = List.copyOf(commandActions);
+            inputs = List.copyOf(inputs);
+        }
+
+        private int totalPrimaryActions() {
+            return customActionIds.size() + commandActions.size();
+        }
+
+        private static AuthenticationActionScan empty() {
+            return new AuthenticationActionScan(List.of(), List.of(), List.of());
+        }
+    }
+
+    private enum DialogInputKind {
+        TEXT,
+        BOOLEAN,
+        UNKNOWN
+    }
+
+    private record DialogInputField(DialogInputKind kind, String key, String label) {
+    }
+
+    private record SecondaryInput(String key, AuthenticationUiInputPurpose purpose) {
+        private static SecondaryInput none() {
+            return new SecondaryInput(null, AuthenticationUiInputPurpose.NONE);
+        }
     }
 
     private void changeState(TransportState replacement) {

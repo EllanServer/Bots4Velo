@@ -4,7 +4,10 @@ plugins {
 }
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
-sourceSets.main { java.srcDir("../modern-common/src/main/java") }
+sourceSets {
+    main { java.srcDir("../modern-common/src/main/java") }
+    test { java.srcDir("../modern-common/src/test/java") }
+}
 repositories {
     mavenCentral(); maven("https://repo.opencollab.dev/main/"); maven("https://jitpack.io")
 }
@@ -13,7 +16,13 @@ dependencies {
     implementation("org.geysermc.mcprotocollib:protocol:26.2-SNAPSHOT")
     implementation("net.kyori:adventure-text-serializer-plain:4.25.0")
     implementation("org.slf4j:slf4j-nop:2.0.17")
+    testImplementation(project(":transport-api"))
+    testImplementation(platform("org.junit:junit-bom:6.0.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.assertj:assertj-core:3.27.7")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
+tasks.test { useJUnitPlatform() }
 tasks.shadowJar {
     archiveFileName.set("modern-26_2.jar")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE

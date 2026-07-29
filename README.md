@@ -61,8 +61,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 
 默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-- `bots4velo-2.6.0.jar`：安装到 Velocity 的 `plugins` 目录；
-- `bots4velo-paper-2.6.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+- `bots4velo-2.7.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-2.7.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
 
 也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
@@ -89,15 +89,21 @@ git push origin v2.0.0
 `bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
 测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
 
-`v2.6.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
+`v2.7.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
 同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
 
 ## 集成验证
 
 普通 CI 会在 `1.16.5`、`1.21.11`、`26.1.2` 与 `26.2` 四个目标上执行协议映射回归，并为每个
-目标下载并启动一个临时 Velocity + AuthMe 登录服 + lobby + AFK Paper 网络。两个 Paper 后端都会安装
-伴侣 JAR 并使用与 Velocity 相同的测试密钥；CI 除验证登录、PLAY、跨服与后端/代理重启恢复外，还会等待
-签名策略 ACK，并确认后端恢复和代理重启后重新应用玩家状态。完整日志会作为 CI artifact 上传。
+目标下载并启动一个临时 Velocity + AuthMe 登录服 + AFK Paper 网络。现代登录服还会固定安装来自
+Modrinth 的 `TejasLamba2006/AuthMeUI 1.3.4`，校验其 SHA-256，并用自定义规则复选框验证
+`RULES → REGISTER → PLAY`；1.16.5 保留聊天命令注册回退。两个 Paper 后端都会安装伴侣 JAR 并使用与
+Velocity 相同的测试密钥；CI 除验证登录、PLAY、跨服与后端/代理重启恢复外，还会等待签名策略 ACK，
+并确认后端恢复和代理重启后重新应用玩家状态。首次连接使用 AuthMeUI pre-join 完成规则与注册；随后会
+安全重启登录服并验证 post-join `LOGIN → PLAY`，最后再切回 pre-join，确认有效 AuthMe session 会跳过
+登录 Dialog、在进入 PLAY 后由 AuthMe 的 session-success 消息放行，并且不会重复提交密码。完整日志会作为
+CI artifact 上传。测试会先确认 AuthMe 与 AuthMeUI 都真正启用；依赖下载或 bridge 连接失败不会被误判为
+Dialog 兼容问题。
 `scripts/ci/run-network-integration.sh` 也可在
 Linux 上单独执行。现有本地隔离网络启动后还可执行：
 
@@ -323,7 +329,8 @@ bots:
 `/vbot history <id>` 显示最近 50 条连接、认证、切服和断线事件。`/vbot monitor` 还包含
 `onlineSeconds`、`failureCategory`、行为状态与事件列表，便于外部采集器判断不稳定重连和认证失败。
 认证配置的 `failure-messages` 可匹配密码错误、验证码、2FA 或封禁提示；匹配后机器人进入 `FAILED`
-并停止自动重连，管理员可修复账号后执行 `/vbot reconnect <id>`。
+并停止自动重连。定时 `start`/`reconnect` 与 `presence-rules` 也不会越过这个人工介入状态；管理员修复账号后可执行
+`/vbot start <id>` 或 `/vbot reconnect <id>` 明确恢复。
 
 其他 Velocity 插件可通过 `Bots4VeloApiProvider.get()` 获得 `Bots4VeloApi`，读取机器人快照、请求
 start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完成初始化时可用。
@@ -335,6 +342,11 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 `maximum-humans` 时，插件会从 `selector` 中启动最多 `minimum-bots` 个机器人并切至该后端；
 人数上升后则停止这些明确由规则管理的机器人。规则会先 ping 后端；维护期间 ping 失败时等待，后端
 恢复后再按 `spawn-interval-ms` 的连接限速分批重新进入。
+
+在 Velocity 已处于 PLAY 的玩家跨后端回退时，代理不一定会转发后端的 configuration-phase Dialog。
+若登录服使用 AuthMeUI pre-join，建议同时启用 AuthMe sessions 与
+`configuration-phase-respect-authme-sessions: true`；否则后端故障回退可能要等 AuthMeUI 配置阶段超时，
+再由完整重连恢复。post-join 模式不受这个配置阶段限制。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
 主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用
@@ -350,42 +362,104 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 校正机器人。`position` 和 `monitor` 会反映最近一次客户端接受的服务器位置，`pitch` 范围为
 `-90..90`。`monitor` 输出单行 JSON，适合控制台采集器或外部健康检查读取。
 
-### AuthMe、AuthMe UI 与 Smart AuthMe Login UI
+### AuthMe、AuthMeUI 与 Smart AuthMe Login UI
 
-Bots4Velo 支持 AuthMe/AuthMeReloaded 的聊天命令认证，也支持现代 Paper 上的登录 UI：
+这里的 **AuthMeUI** 特指 [`TejasLamba2006/AuthMeUI 1.3.4`](https://modrinth.com/plugin/authmeui/version/1.3.4)，
+不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.7 支持它的两种工作方式：
 
-- AuthMe 6 内置 `preJoin` Dialog：机器人读取登录/注册表单，在 CONFIGURATION 阶段提交密码；
-  表单通过并进入 PLAY 后才会切服或执行登录后命令。
-- AuthMe 6 内置 `postJoin` Dialog：机器人识别 Dialog 中的登录/注册命令模板并走正常命令认证。
-- Smart AuthMe Login UI：机器人读取 Title/Subtitle 提示，兼容其命令同步与默认
-  `Authenticated` 成功标题。
+- pre-join：在 CONFIGURATION 阶段依次处理服务器规则、注册或登录 Dialog，完成后才进入 PLAY；
+- post-join：进入 PLAY 后处理 AuthMeUI 的登录/注册 Dialog，再继续切服和登录后命令；
+- 规则与字段：读取 Dialog 中实际的 custom-click action 和受支持字段 key，给规则布尔字段写入 `true`，
+  并按表单实际 key 填写密码、确认密码及已配置的注册邮箱；自定义规则 checkbox key 可以改名，
+  AuthMeUI 1.3.4 固定的 `password`/`confirm` 字段会被精确识别；
+- 状态诊断：`/vbot status <id>` 的 `Auth UI`、`Presented`、`Submitted` 可区分未识别、已展示但未提交、
+  已提交但认证失败三类问题。事件历史会以 `AUTH_UI` 记录 provider 与 `RULES/REGISTER/LOGIN` 阶段，
+  不会记录密码。
 
-pre-join 处理会从收到的 Dialog NBT 中提取实际 custom-click 动作 ID 和密码字段名，不依赖某个
-固定 AuthMe build。`/vbot status <id>` 会显示 `Auth UI`、`Presented`、`Submitted`：若两个计数
-都是 `0`，说明服务器 UI 格式未被识别；若 `Presented` 大于 `Submitted`，说明表单无法提交；若
-已经提交但后端仍超时，通常是密码不正确、账号注册状态不符，或后端还要求验证码/2FA。
+AuthMeUI 管理命令仍由它自己提供：`/authmeui reload` 使用 `authmeui.admin` 权限；玩家可用
+`/authmeui show <login|register>` 手动打开对应测试 Dialog。Bots4Velo 侧不需要新增认证命令，机器人保持
+`auth.mode: AUTO` 并配置 `password`、`password-env` 或 `password-secret` 即可。Bots4Velo 与此 CI 配置
+默认使用英文消息；自定义 AuthMeUI 标题、正文和字段标签不会要求切换 Bots4Velo 语言。
 
-因此 1.21.11、26.1 和 26.2 登录服可以保持 Dialog 开启，例如：
+机器人可显式控制规则接受和邮箱字段；默认允许规则，邮箱默认为空。AuthMeUI/底层 AuthMe 要求邮箱时必须配置：
 
 ```yaml
+bots:
+  LobbyBot:
+    auth:
+      mode: AUTO
+      authmeui:
+        accept-rules: true
+        registration-email: "bot@example.com"
+        # AUTO, CONFIRMATION, EMAIL_OPTIONAL or EMAIL_MANDATORY
+        registration-second-argument: AUTO
+        # 给 post-join Dialog 留出检测时间；旧版 1.16.5 不受影响
+        ui-detection-grace-ms: 3000
+```
+
+`registration-second-argument` 仅影响 AuthMeUI 的注册 Dialog，不改变 AuthMe 自带 Dialog：
+
+- `AUTO`（默认）：按收到的字段 key/label 判断第二字段是密码确认还是邮箱；
+- `CONFIRMATION`：给第二字段重复填写密码；
+- `EMAIL_OPTIONAL`：有 `registration-email` 时填写邮箱，没有时提交空的第二字段；
+- `EMAIL_MANDATORY`：必须配置非空 `registration-email`，否则机器人会明确停止并报告原因。
+
+`ui-detection-grace-ms` 默认是 `3000`。现代机器人第一次进入 PLAY 后会先等待这段时间，让 AuthMeUI 的
+post-join Dialog 有机会出现；一旦识别到 UI，就不会再抢先发送聊天 `/login` 或 `/register`。设为 `0`
+可恢复立即使用聊天认证的旧行为。Dialog 的标题、正文和按钮文字只用于显示/字段语义判断，绝不会被当作
+登录成功、失败或聊天提示的证据。
+
+AuthMeUI 默认可以尊重 AuthMe session。启用 `configuration-phase-respect-authme-sessions` 后，有效 session
+不会再展示登录 Dialog；AuthMeUI 1.3.4 会把检查延后到玩家加入，随后 AuthMe 发送
+`Logged-in due to Session Reconnection.`。Bots4Velo 即使已进入 PLAY，也会继续锁住切服与挂机行为，直到匹配
+这条成功证据才放行。
+
+AuthMeUI 1.3.4 自身不能在 configuration/pre-join 阶段保存邮箱注册：`EMAIL_OPTIONAL` 只有邮箱为空时
+可以继续按无邮箱注册；一旦需要提交非空邮箱，或使用 `EMAIL_MANDATORY`，必须把
+`dialogs.use-configuration-phase` 设为 `false`，改用 post-join。`AUTO` 推断到邮箱字段时也遵守同一限制，
+不会为了绕过限制丢弃已经配置的邮箱。
+
+不要同时启用 AuthMe 6 自带 Dialog 和 AuthMeUI。选择 AuthMeUI 时，建议无论上游默认值如何都显式关闭
+AuthMe 自带的 pre/post Dialog，再单独选择 AuthMeUI 的 pre-join 或 post-join 模式：
+
+```yaml
+# plugins/AuthMe/config.yml
 settings:
   registration:
     dialog:
       preJoin:
-        enable: true
+        enable: false
       postJoin:
-        enable: true
+        enable: false
+
+# plugins/AuthMeUI/config.yml
+dialogs:
+  use-configuration-phase: true # false = post-join
+rules-dialog:
+  enabled: true
+  agreement:
+    enabled: true
+    checkbox-key: "rules_accepted" # 可以改名，Bots4Velo 会读取实际 key
 ```
 
-默认正则已覆盖 AuthMe 的 `/register`、`/login`、`Successfully registered!` 和
-`Successful login!` 英文消息、Smart AuthMe Login UI 默认的 `Authenticated`，以及常见中文成功消息。
-若服务器修改了语言文件或 UI 标题，应把实际文案加入
-各机器人的 `login-prompts`、`register-prompts` 和 `success-messages`。
+兼容边界如下：
 
-1.16.5 不支持现代 Dialog 数据包，仍使用聊天命令流程。其他改变 AuthMe pre-join 自定义动作 ID
-或要求验证码、邮箱、2FA 的扩展不能仅靠密码自动通过，应为机器人账号配置绕过或使用相应命令流程。
-Smart AuthMe Login UI 的 `premiumNameProtection` 可能拒绝与 Mojang 正版账号同名的离线机器人；生产服应
-使用不会撞名的专用机器人名称，或按该插件的安全策略单独放行，而不是全局关闭名称保护。
+- AuthMeUI 1.3.4 需要 Paper 1.21.7+、Java 21+ 和 AuthMe 5.6+；
+- `1.21.11` 与 `26.1.2` 是 AuthMeUI 1.3.4 的主要 CI 目标；
+- `26.2` 已在真实 Velocity + AuthMe 6.0.0 + AuthMeUI 1.3.4 + 双 Paper 网络完成
+  `RULES → REGISTER → PLAY`、post-join 登录与 AuthMe session 复用验证；
+- `1.16.5` 不安装 AuthMeUI，继续使用 AuthMe/AuthMeReloaded 的聊天 `/login`、`/register` 回退；
+- 验证码、2FA 或插件额外增加的未知必填字段不会被猜测填写；注册邮箱必须由管理员显式配置。应给专用
+  机器人账号配置安全的单独放行规则；密码错误或无法自动处理的步骤会按认证失败/超时停止重试。
+
+Bots4Velo 仍支持 AuthMe 6 自带的 preJoin/postJoin Dialog，以及 Smart AuthMe Login UI 的
+Title/Subtitle 和默认 `Authenticated` 成功标题。部署时只选择一套主要 UI，避免两个插件同时发送认证表单。
+默认正则覆盖 AuthMe 的 `/register`、`/login`、`Successfully registered!`、`Successful login!` 和常见
+session reconnect/中文成功消息；自定义聊天文案时应同步更新机器人的 `login-prompts`、`register-prompts`
+与 `success-messages`。未声明 `success-messages` 时会使用这组安全默认值；显式配置为空列表则不会把
+Dialog 提交本身当作成功，native UI 会保持 fail-closed 并最终报告认证超时。Smart AuthMe Login UI 的
+`premiumNameProtection` 可能拒绝与 Mojang 正版账号同名的
+离线机器人，生产服应使用不会撞名的专用机器人名称或按插件安全策略单独放行。
 
 ### TAB
 

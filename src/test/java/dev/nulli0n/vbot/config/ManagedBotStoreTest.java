@@ -52,6 +52,9 @@ class ManagedBotStoreTest {
 
         assertThat(matchesAny(definition, "You have successfully registered! ")).isTrue();
         assertThat(matchesAny(definition, "Successful login!")).isTrue();
+        assertThat(matchesAny(definition, "Login session continued.")).isTrue();
+        assertThat(matchesAny(definition, "Logged-in due to Session Reconnection.")).isTrue();
+        assertThat(matchesAny(definition, "You are already logged in!")).isTrue();
     }
 
     @Test
@@ -86,6 +89,39 @@ class ManagedBotStoreTest {
             .contains("player-state:", "afk-preset: FARM", "invulnerable: ENABLED",
                 "sleep-ignored: DISABLED", "affects-spawning: ENABLED", "pickup-items: ENABLED",
                 "collidable: DISABLED", "game-mode: SURVIVAL", "mode: FIXED");
+    }
+
+    @Test
+    void roundTripsManagedAuthMeUiConfiguration() throws Exception {
+        BotDefinition base = ManagedBotStore.createDefinition(
+            "AuthUi01", "AFK_AuthUi01", "secret", "lobby");
+        BotPluginConfig.AuthConfig original = base.auth();
+        BotPluginConfig.AuthConfig auth = new BotPluginConfig.AuthConfig(
+            original.mode(), original.loginCommand(), original.registerCommand(), original.loginDelayMillis(),
+            original.fallbackRegisterDelayMillis(), original.afterAuthDelayMillis(), original.loginPrompts(),
+            original.registerPrompts(), original.successMessages(), original.failureMessages(),
+            original.timeoutMillis(), false, "bot@example.test",
+            BotPluginConfig.RegistrationSecondArgument.EMAIL_MANDATORY, 4_500L);
+        BotDefinition definition = new BotDefinition(
+            base.id(), base.enabled(), base.username(), base.password(), base.targetServer(),
+            base.protocolDetectionServer(), base.renderDistance(), auth, base.serverSwitchCommand(),
+            base.serverSwitchDelayMillis(), base.serverSwitchMaximumAttempts(), base.afterLoginCommands(),
+            base.groups(), base.tags(), base.displayName(), base.tabGroup(), base.protocolOverride(),
+            base.templateName(), base.behavior(), base.playerState());
+
+        ManagedBotStore store = ManagedBotStore.load(temporaryDirectory);
+        store.add(definition);
+
+        BotPluginConfig.AuthConfig reloaded = ManagedBotStore.load(temporaryDirectory)
+            .definitions().get("authui01").auth();
+        assertThat(reloaded.acceptRules()).isFalse();
+        assertThat(reloaded.registrationEmail()).isEqualTo("bot@example.test");
+        assertThat(reloaded.registrationSecondArgument())
+            .isEqualTo(BotPluginConfig.RegistrationSecondArgument.EMAIL_MANDATORY);
+        assertThat(reloaded.uiDetectionGraceMillis()).isEqualTo(4_500L);
+        assertThat(Files.readString(temporaryDirectory.resolve(ManagedBotStore.FILE_NAME)))
+            .contains("authmeui:", "accept-rules: false", "registration-email: bot@example.test",
+                "registration-second-argument: EMAIL_MANDATORY", "ui-detection-grace-ms: 4500");
     }
 
     @Test

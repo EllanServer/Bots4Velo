@@ -17,6 +17,18 @@ public interface BotTransport extends AutoCloseable {
         return false;
     }
 
+    /**
+     * Submits a recognized authentication dialog, including an optional email
+     * when the registration form explicitly requests one.
+     */
+    default boolean submitAuthenticationUi(
+        AuthenticationUiChallenge challenge,
+        String password,
+        String registrationEmail
+    ) {
+        return submitAuthenticationUi(challenge, password);
+    }
+
     boolean moveTo(double x, double y, double z);
 
     boolean look(float yaw, float pitch);

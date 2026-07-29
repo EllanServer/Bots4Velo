@@ -381,13 +381,83 @@ public record BotPluginConfig(
         List<String> registerPrompts,
         List<String> successMessages,
         List<String> failureMessages,
-        long timeoutMillis
+        long timeoutMillis,
+        boolean acceptRules,
+        String registrationEmail,
+        RegistrationSecondArgument registrationSecondArgument,
+        long uiDetectionGraceMillis
     ) {
         public AuthConfig {
             loginPrompts = List.copyOf(loginPrompts);
             registerPrompts = List.copyOf(registerPrompts);
             successMessages = List.copyOf(successMessages);
             failureMessages = List.copyOf(failureMessages);
+            registrationEmail = registrationEmail == null ? "" : registrationEmail.trim();
+            registrationSecondArgument = registrationSecondArgument == null
+                ? RegistrationSecondArgument.AUTO
+                : registrationSecondArgument;
+        }
+
+        /** Source-compatible constructor for the AuthMeUI model before UI detection grace. */
+        public AuthConfig(
+            AuthMode mode,
+            String loginCommand,
+            String registerCommand,
+            long loginDelayMillis,
+            long fallbackRegisterDelayMillis,
+            long afterAuthDelayMillis,
+            List<String> loginPrompts,
+            List<String> registerPrompts,
+            List<String> successMessages,
+            List<String> failureMessages,
+            long timeoutMillis,
+            boolean acceptRules,
+            String registrationEmail,
+            RegistrationSecondArgument registrationSecondArgument
+        ) {
+            this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages,
+                timeoutMillis, acceptRules, registrationEmail, registrationSecondArgument, 3_000L);
+        }
+
+        /** Source-compatible constructor for the initial AuthMeUI configuration model. */
+        public AuthConfig(
+            AuthMode mode,
+            String loginCommand,
+            String registerCommand,
+            long loginDelayMillis,
+            long fallbackRegisterDelayMillis,
+            long afterAuthDelayMillis,
+            List<String> loginPrompts,
+            List<String> registerPrompts,
+            List<String> successMessages,
+            List<String> failureMessages,
+            long timeoutMillis,
+            boolean acceptRules,
+            String registrationEmail
+        ) {
+            this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages,
+                timeoutMillis, acceptRules, registrationEmail, RegistrationSecondArgument.AUTO, 3_000L);
+        }
+
+        /** Source-compatible constructor for the complete pre-AuthMeUI configuration model. */
+        public AuthConfig(
+            AuthMode mode,
+            String loginCommand,
+            String registerCommand,
+            long loginDelayMillis,
+            long fallbackRegisterDelayMillis,
+            long afterAuthDelayMillis,
+            List<String> loginPrompts,
+            List<String> registerPrompts,
+            List<String> successMessages,
+            List<String> failureMessages,
+            long timeoutMillis
+        ) {
+            this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages,
+                timeoutMillis, true, "", RegistrationSecondArgument.AUTO, 3_000L);
         }
 
         public AuthConfig(
@@ -403,7 +473,8 @@ public record BotPluginConfig(
             List<String> failureMessages
         ) {
             this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
-                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages, 30_000);
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, failureMessages,
+                30_000, true, "", RegistrationSecondArgument.AUTO, 3_000L);
         }
 
         public AuthConfig(
@@ -418,7 +489,8 @@ public record BotPluginConfig(
             List<String> successMessages
         ) {
             this(mode, loginCommand, registerCommand, loginDelayMillis, fallbackRegisterDelayMillis,
-                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, List.of());
+                afterAuthDelayMillis, loginPrompts, registerPrompts, successMessages, List.of(),
+                30_000, true, "", RegistrationSecondArgument.AUTO, 3_000L);
         }
     }
 
@@ -427,6 +499,13 @@ public record BotPluginConfig(
         LOGIN,
         REGISTER,
         AUTO
+    }
+
+    public enum RegistrationSecondArgument {
+        AUTO,
+        CONFIRMATION,
+        EMAIL_OPTIONAL,
+        EMAIL_MANDATORY
     }
 
     public enum ResourcePackMode {

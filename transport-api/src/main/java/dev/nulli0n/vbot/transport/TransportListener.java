@@ -8,6 +8,14 @@ public interface TransportListener {
     default void onAuthenticationUi(AuthenticationUiChallenge challenge) {
     }
 
+    /**
+     * Reports a structurally recognized AuthMe post-join command-template UI.
+     * The transport exposes only the authentication intent, never dialog text
+     * or the command template itself.
+     */
+    default void onAuthenticationCommandUi(AuthenticationUiType type) {
+    }
+
     void onDisconnected(String reason, Throwable cause);
 
     default void onResourcePackStatus(String status) {

@@ -3,12 +3,15 @@ package dev.nulli0n.vbot.bot;
 import dev.nulli0n.vbot.config.BotPluginConfig.AuthMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.BotDefinition;
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
+import dev.nulli0n.vbot.config.BotPluginConfig.RegistrationSecondArgument;
 import dev.nulli0n.vbot.config.BotPluginConfig.ResourcePackMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.RuntimeConfig;
 import dev.nulli0n.vbot.protocol.ProtocolResolver;
 import dev.nulli0n.vbot.protocol.ProtocolVersion;
 import dev.nulli0n.vbot.protocol.TransportRegistry;
 import dev.nulli0n.vbot.transport.AuthenticationUiChallenge;
+import dev.nulli0n.vbot.transport.AuthenticationUiInputPurpose;
+import dev.nulli0n.vbot.transport.AuthenticationUiProvider;
 import dev.nulli0n.vbot.transport.AuthenticationUiType;
 import dev.nulli0n.vbot.transport.BotTransport;
 import dev.nulli0n.vbot.transport.BotPosition;
@@ -20,6 +23,7 @@ import org.slf4j.Logger;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,6 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -48,13 +53,17 @@ public final class BotSession implements BehaviorTarget {
     private final Consumer<BotEvent> eventSink;
     private final AtomicReference<BotState> state = new AtomicReference<>(BotState.STOPPED);
     private final AtomicBoolean manualStop = new AtomicBoolean(true);
-    private final AtomicBoolean terminalFailure = new AtomicBoolean();
+    private final AtomicBoolean authenticationInterventionRequired = new AtomicBoolean();
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
     private final AtomicLong generation = new AtomicLong();
     private final AtomicBoolean loginSent = new AtomicBoolean();
     private final AtomicBoolean registerSent = new AtomicBoolean();
-    private final AtomicBoolean authCompleted = new AtomicBoolean();
-    private final AtomicBoolean preJoinAuthSubmitted = new AtomicBoolean();
+    private final AuthenticationOutcomeGate authenticationOutcome = new AuthenticationOutcomeGate();
+    private final AuthenticationUiFlow authenticationUiFlow = new AuthenticationUiFlow();
+    private final AtomicBoolean authenticationCommandUiActive = new AtomicBoolean();
+    private final AuthenticationCommandUiTracker authenticationCommandUiTracker =
+        new AuthenticationCommandUiTracker();
+    private final AtomicReference<AuthenticationUiType> deferredChatAuthenticationPrompt = new AtomicReference<>();
     private final AtomicBoolean playInitialized = new AtomicBoolean();
     private final AtomicInteger playTransitionsThisConnection = new AtomicInteger();
     private final AtomicBoolean serverSwitchPending = new AtomicBoolean();
@@ -128,6 +137,38 @@ public final class BotSession implements BehaviorTarget {
     }
 
     public synchronized void start() {
+        if (!connectionStartAllowed(state.get())) {
+            return;
+        }
+        authenticationInterventionRequired.set(false);
+        startInternal();
+    }
+
+    /**
+     * Starts a bot for a scheduler or presence rule without bypassing a
+     * fail-closed authentication result. An operator can still use start or
+     * reconnect after correcting the account or authentication configuration.
+     */
+    public synchronized void startAutomatically() {
+        if (!automaticStartAllowed(state.get(), authenticationInterventionRequired.get())) {
+            return;
+        }
+        startInternal();
+    }
+
+    static boolean automaticStartAllowed(BotState current, boolean authenticationInterventionRequired) {
+        return automaticRecoveryAllowed(authenticationInterventionRequired) && connectionStartAllowed(current);
+    }
+
+    static boolean automaticRecoveryAllowed(boolean authenticationInterventionRequired) {
+        return !authenticationInterventionRequired;
+    }
+
+    private static boolean connectionStartAllowed(BotState current) {
+        return current == BotState.STOPPED || current == BotState.FAILED;
+    }
+
+    private void startInternal() {
         BotState current = state.get();
         // Presence rules run periodically. Starting again while a connection
         // is pending or already active creates a second client with the same
@@ -136,7 +177,6 @@ public final class BotSession implements BehaviorTarget {
             return;
         }
         manualStop.set(false);
-        terminalFailure.set(false);
         event("START_REQUESTED", "operator or automatic startup");
         scheduleConnection(0);
     }
@@ -159,10 +199,14 @@ public final class BotSession implements BehaviorTarget {
         state.set(BotState.STOPPED);
     }
 
-    public void reconnectNow() {
+    public synchronized void reconnectNow() {
+        authenticationInterventionRequired.set(false);
+        reconnectInternal("operator request");
+    }
+
+    private void reconnectInternal(String source) {
         manualStop.set(false);
-        terminalFailure.set(false);
-        event("RECONNECT_REQUESTED", "operator request");
+        event("RECONNECT_REQUESTED", source);
         cancelReconnect();
         cancelServerSwitch();
         behavior.onUnavailable();
@@ -175,6 +219,13 @@ public final class BotSession implements BehaviorTarget {
         }
         state.set(BotState.RECONNECT_WAIT);
         scheduleConnection(200);
+    }
+
+    public synchronized void reconnectAutomatically() {
+        if (!automaticRecoveryAllowed(authenticationInterventionRequired.get())) {
+            return;
+        }
+        reconnectInternal("automatic schedule");
     }
 
     public boolean sendCommand(String command) {
@@ -220,7 +271,7 @@ public final class BotSession implements BehaviorTarget {
     }
 
     public boolean isAuthenticationComplete() {
-        return authCompleted.get();
+        return authenticationOutcome.succeeded();
     }
 
     public void startBehavior() {
@@ -317,8 +368,11 @@ public final class BotSession implements BehaviorTarget {
         connectedAt = null;
         loginSent.set(false);
         registerSent.set(false);
-        authCompleted.set(false);
-        preJoinAuthSubmitted.set(false);
+        authenticationOutcome.reset();
+        authenticationUiFlow.reset();
+        authenticationCommandUiActive.set(false);
+        authenticationCommandUiTracker.reset();
+        deferredChatAuthenticationPrompt.set(null);
         authenticationUiPresentations.set(0);
         authenticationUiSubmissions.set(0);
         lastAuthenticationUi.set("none");
@@ -359,14 +413,27 @@ public final class BotSession implements BehaviorTarget {
                 state.set(BotState.PLAY);
                 reconnectAttempts.set(0);
                 playTransitionsThisConnection.incrementAndGet();
-                if (playInitialized.compareAndSet(false, true)) {
+                boolean firstPlay = playInitialized.compareAndSet(false, true);
+                if (firstPlay) {
                     playEntries.incrementAndGet();
                     lastPlayAt = Instant.now();
                     logger.info("Bot {} entered PLAY using {}", definition.id(), activeProtocol);
                     event("PLAY", activeProtocol);
-                    if (preJoinAuthSubmitted.get()) {
-                        logger.info("Bot {} completed authentication through a pre-join UI", definition.id());
-                        completeAuthentication(currentGeneration);
+                }
+                if (firstPlay && authenticationOutcome.consumePrePlaySuccess()) {
+                    logger.info("Bot {} applied authentication success received before PLAY", definition.id());
+                    event("AUTHENTICATED", "success message received before PLAY");
+                    applyAuthenticationSuccess(currentGeneration);
+                }
+                else if (authenticationUiFlow.credentialReadyOnPlay()) {
+                    if (completeAuthentication(currentGeneration)) {
+                        logger.info("Bot {} completed authentication UI after entering PLAY", definition.id());
+                        event("AUTHENTICATED", lastAuthenticationUi.get() + " entered PLAY");
+                    }
+                }
+                else if (firstPlay) {
+                    if (authenticationUiActive()) {
+                        logger.info("Bot {} is waiting for the next AuthMeUI stage", definition.id());
                     }
                     else {
                         scheduleAuthentication(currentGeneration);
@@ -375,7 +442,7 @@ public final class BotSession implements BehaviorTarget {
                 else if (serverSwitchPending.get() && isConfirmedServerTransition()) {
                     completeServerSwitch(currentGeneration);
                 }
-                else if (authCompleted.get()) {
+                else if (authenticationOutcome.succeeded()) {
                     behavior.onReady();
                 }
             }
@@ -388,40 +455,47 @@ public final class BotSession implements BehaviorTarget {
             completeAuthentication(currentGeneration);
             return;
         }
+        if (authenticationUiActive()) {
+            return;
+        }
         scheduleAuthenticationTimeout(currentGeneration);
         executor.schedule(() -> {
-            if (!isPlayable(currentGeneration) || authCompleted.get()) {
+            if (!shouldRunChatAuthentication(
+                isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
                 return;
             }
-            if (mode == AuthMode.REGISTER) {
+            runInitialChatAuthentication(currentGeneration, mode);
+        }, initialAuthenticationDelayMillis(activeProtocolVersion, definition.auth().loginDelayMillis(),
+            definition.auth().uiDetectionGraceMillis()), TimeUnit.MILLISECONDS);
+    }
+
+    private void runInitialChatAuthentication(long currentGeneration, AuthMode mode) {
+        AuthenticationUiType prompted = deferredChatAuthenticationPrompt.getAndSet(null);
+        AuthenticationUiType selected = prompted != null && authenticationTypeExpected(mode, prompted)
+            ? prompted
+            : mode == AuthMode.REGISTER ? AuthenticationUiType.REGISTER : AuthenticationUiType.LOGIN;
+        if (selected == AuthenticationUiType.REGISTER) {
+            sendRegister();
+            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
+            return;
+        }
+        sendLogin();
+        if (mode == AuthMode.LOGIN) {
+            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
+            return;
+        }
+        executor.schedule(() -> {
+            if (shouldRunChatAuthentication(
+                isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
                 sendRegister();
                 scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
             }
-            else {
-                // A prompt may arrive before this initial timer. Respect the
-                // branch selected by that prompt instead of sending the other
-                // AuthMe command afterwards.
-                if (mode == AuthMode.AUTO && (loginSent.get() || registerSent.get())) {
-                    return;
-                }
-                sendLogin();
-                if (mode == AuthMode.LOGIN) {
-                    scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
-                }
-                else {
-                    executor.schedule(() -> {
-                        if (isPlayable(currentGeneration) && !authCompleted.get()) {
-                            sendRegister();
-                            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
-                        }
-                    }, definition.auth().fallbackRegisterDelayMillis(), TimeUnit.MILLISECONDS);
-                }
-            }
-        }, definition.auth().loginDelayMillis(), TimeUnit.MILLISECONDS);
+        }, definition.auth().fallbackRegisterDelayMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void handleAuthMessage(long currentGeneration, String message) {
-        if (!isCurrent(currentGeneration) || authCompleted.get() || definition.auth().mode() == AuthMode.NONE) {
+        if (!isCurrent(currentGeneration) || !authenticationOutcome.pending()
+            || definition.auth().mode() == AuthMode.NONE) {
             return;
         }
         if (matches(failureMessages, message)) {
@@ -429,25 +503,60 @@ public final class BotSession implements BehaviorTarget {
         }
         else if (matches(successMessages, message)) {
             logger.info("Bot {} matched an authentication success message", definition.id());
-            event("AUTHENTICATED", "success message");
-            completeAuthentication(currentGeneration);
+            if (isPlayable(currentGeneration)) {
+                if (completeAuthentication(currentGeneration)) {
+                    event("AUTHENTICATED", "success message");
+                }
+            }
+            else if (!playInitialized.get() && authenticationOutcome.succeedBeforePlay()) {
+                cancelAuthenticationTimeout();
+                logger.info("Bot {} deferred authentication success until its first PLAY transition",
+                    definition.id());
+                event("AUTH_SUCCESS_DEFERRED", "success message received before PLAY");
+            }
         }
         else if (matches(registerPrompts, message)) {
+            if (authenticationUiActive()) {
+                logger.debug("Bot {} ignored a chat registration prompt because AuthMeUI is active", definition.id());
+                return;
+            }
             logger.info("Bot {} matched a registration prompt", definition.id());
             event("AUTH_PROMPT", "registration");
+            if (deferChatAuthenticationPrompt(AuthenticationUiType.REGISTER)) {
+                return;
+            }
             sendRegister();
             scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
         else if (matches(loginPrompts, message)) {
+            if (authenticationUiActive()) {
+                logger.debug("Bot {} ignored a chat login prompt because AuthMeUI is active", definition.id());
+                return;
+            }
             logger.info("Bot {} matched a login prompt", definition.id());
             event("AUTH_PROMPT", "login");
+            if (deferChatAuthenticationPrompt(AuthenticationUiType.LOGIN)) {
+                return;
+            }
             sendLogin();
             scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
     }
 
+    private boolean deferChatAuthenticationPrompt(AuthenticationUiType type) {
+        if (!withinUiDetectionGrace(activeProtocolVersion, definition.auth().uiDetectionGraceMillis(),
+            lastPlayAt, Instant.now())) {
+            return false;
+        }
+        deferredChatAuthenticationPrompt.set(type);
+        logger.info("Bot {} deferred its {} chat prompt during the authentication UI detection grace",
+            definition.id(), type);
+        event("AUTH_PROMPT_DEFERRED", type.name());
+        return true;
+    }
+
     private void failAuthentication(long currentGeneration, String message) {
-        if (!isCurrent(currentGeneration) || !terminalFailure.compareAndSet(false, true)) {
+        if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
             return;
         }
         FailureCategory category = FailureCategory.classify(message);
@@ -466,7 +575,7 @@ public final class BotSession implements BehaviorTarget {
             return;
         }
         authenticationTimeoutTask = executor.schedule(() -> {
-            if (!isCurrent(currentGeneration) || authCompleted.get() || !terminalFailure.compareAndSet(false, true)) {
+            if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
                 return;
             }
             lastDisconnectReason = "authentication timed out after " + timeout + " ms";
@@ -476,8 +585,9 @@ public final class BotSession implements BehaviorTarget {
         }, timeout, TimeUnit.MILLISECONDS);
     }
 
-    private void stopAfterAuthenticationFailure() {
+    private synchronized void stopAfterAuthenticationFailure() {
         cancelAuthenticationTimeout();
+        authenticationInterventionRequired.set(true);
         manualStop.set(true);
         cancelReconnect();
         cancelServerSwitch();
@@ -490,53 +600,308 @@ public final class BotSession implements BehaviorTarget {
     }
 
     private void handleAuthenticationUi(long currentGeneration, AuthenticationUiChallenge challenge) {
-        if (!isCurrent(currentGeneration) || authCompleted.get() || definition.auth().mode() == AuthMode.NONE) {
+        if (!isCurrent(currentGeneration)) {
             return;
         }
-        AuthenticationUiType type = challenge.type();
-        authenticationUiPresentations.incrementAndGet();
-        lastAuthenticationUi.set(challenge.description());
+        AuthenticationUiChallenge normalizedChallenge = normalizeAuthenticationUiChallenge(
+            challenge, definition.auth().registrationSecondArgument());
         AuthMode mode = definition.auth().mode();
-        boolean expected = mode == AuthMode.AUTO
-            || (mode == AuthMode.LOGIN && type == AuthenticationUiType.LOGIN)
-            || (mode == AuthMode.REGISTER && type == AuthenticationUiType.REGISTER);
-        if (!expected) {
-            logger.warn("Bot {} received an AuthMe {} UI while configured for auth mode {}",
-                definition.id(), type, mode);
+        if (ignoresAuthenticationUi(mode)) {
+            recordIgnoredAuthenticationUi(normalizedChallenge.description());
             return;
         }
-        if (!preJoinAuthSubmitted.compareAndSet(false, true)) {
+        if (!authenticationOutcome.pending()) {
             return;
         }
+        authenticationUiPresentations.incrementAndGet();
+        AuthenticationUiFlow.Presentation presentation = authenticationUiFlow.present(
+            normalizedChallenge, mode, definition.auth().acceptRules(),
+            definition.auth().registrationEmail(), definition.auth().registrationSecondArgument(),
+            state.get() == BotState.PLAY);
+        lastAuthenticationUi.set(presentation.stage());
+        event("AUTH_UI", presentation.stage());
+
+        if (presentation.decision() == AuthenticationUiFlow.Decision.REJECT) {
+            failAuthenticationUi(currentGeneration, presentation.stage(), presentation.reason());
+            return;
+        }
+        if (presentation.decision() == AuthenticationUiFlow.Decision.IGNORE) {
+            logger.info("Bot {} ignored a repeated AuthMeUI rules action at {}",
+                definition.id(), presentation.stage());
+            return;
+        }
+
         BotTransport active = transport;
-        if (active == null || !active.submitAuthenticationUi(challenge, definition.password())) {
-            preJoinAuthSubmitted.set(false);
-            logger.warn("Bot {} could not submit the AuthMe pre-join {} UI", definition.id(), type);
+        if (active == null || !active.submitAuthenticationUi(
+            normalizedChallenge, definition.password(), definition.auth().registrationEmail())) {
+            failAuthenticationUi(currentGeneration, presentation.stage(),
+                "transport could not submit the AuthMeUI stage");
         }
         else {
+            boolean submittedInPlay = state.get() == BotState.PLAY;
+            authenticationUiFlow.markSubmitted(presentation, submittedInPlay);
             authenticationUiSubmissions.incrementAndGet();
-            logger.info("Bot {} submitted the AuthMe pre-join {} UI", definition.id(), type);
-            event("AUTH_UI", type.name());
+            logger.info("Bot {} submitted {}", definition.id(), presentation.stage());
+            event("AUTH_UI", presentation.stage() + " submitted");
         }
     }
 
-    private void sendLogin() {
-        if (loginSent.compareAndSet(false, true)) {
+    private synchronized void handleAuthenticationCommandUi(long currentGeneration, AuthenticationUiType type) {
+        AuthMode mode = definition.auth().mode();
+        if (!isPlayable(currentGeneration)
+            || (type != AuthenticationUiType.LOGIN && type != AuthenticationUiType.REGISTER)) {
+            return;
+        }
+        String stage = "AUTHME COMMAND " + type;
+        if (ignoresAuthenticationUi(mode)) {
+            recordIgnoredAuthenticationUi(stage);
+            return;
+        }
+        if (!authenticationOutcome.pending()) {
+            return;
+        }
+        authenticationUiPresentations.incrementAndGet();
+        lastAuthenticationUi.set(stage);
+        event("AUTH_UI", stage);
+        if (!authenticationTypeExpected(mode, type)) {
+            failAuthenticationUi(currentGeneration, stage,
+                type + " command UI is incompatible with auth mode " + mode);
+            return;
+        }
+        if (authenticationCommandUiTracker.wasSubmitted(type)) {
+            failAuthenticationUi(currentGeneration, stage,
+                "credential command UI was presented again after submission");
+            return;
+        }
+
+        authenticationCommandUiActive.set(true);
+        deferredChatAuthenticationPrompt.set(null);
+        boolean submitted = type == AuthenticationUiType.LOGIN ? sendLogin() : sendRegister();
+        boolean commandAlreadySent = type == AuthenticationUiType.LOGIN ? loginSent.get() : registerSent.get();
+        authenticationCommandUiTracker.recordSubmission(type, submitted || commandAlreadySent);
+        if (submitted) {
+            authenticationUiSubmissions.incrementAndGet();
+            logger.info("Bot {} submitted {}", definition.id(), stage);
+            event("AUTH_UI", stage + " submitted");
+        }
+        else if (commandAlreadySent) {
+            // The grace-period chat fallback may have submitted the same
+            // command just before the structured UI arrived. Treat that as
+            // this type's one submission and wait for explicit success.
+        }
+        else {
+            authenticationCommandUiActive.set(false);
+            lastAuthenticationUi.set(stage + " retry pending");
+            logger.warn("Bot {} could not submit {}; a repeated presentation may retry it", definition.id(), stage);
+            event("AUTH_UI_RETRY", stage + " command send failed");
+        }
+    }
+
+    private void recordIgnoredAuthenticationUi(String stage) {
+        authenticationUiPresentations.incrementAndGet();
+        String ignored = ignoredAuthenticationUiStage(stage);
+        lastAuthenticationUi.set(ignored);
+        event("AUTH_UI_IGNORED", ignored);
+    }
+
+    static boolean ignoresAuthenticationUi(AuthMode mode) {
+        return mode == AuthMode.NONE;
+    }
+
+    static String ignoredAuthenticationUiStage(String stage) {
+        return stage + " ignored mode=NONE";
+    }
+
+    static AuthenticationUiChallenge normalizeAuthenticationUiChallenge(
+        AuthenticationUiChallenge challenge,
+        RegistrationSecondArgument configured
+    ) {
+        if (challenge == null || challenge.type() != AuthenticationUiType.REGISTER
+            || challenge.provider() != AuthenticationUiProvider.AUTHME_UI) {
+            return challenge;
+        }
+        RegistrationSecondArgument mode = configured == null
+            ? RegistrationSecondArgument.AUTO
+            : configured;
+        AuthenticationUiInputPurpose purpose = switch (mode) {
+            case AUTO -> challenge.secondaryInputPurpose() == null
+                ? AuthenticationUiInputPurpose.NONE
+                : challenge.secondaryInputPurpose();
+            case CONFIRMATION -> AuthenticationUiInputPurpose.CONFIRMATION;
+            case EMAIL_OPTIONAL, EMAIL_MANDATORY -> AuthenticationUiInputPurpose.EMAIL;
+        };
+        return new AuthenticationUiChallenge(
+            challenge.type(), challenge.provider(), challenge.actionId(), challenge.passwordInput(),
+            challenge.secondaryInput(), purpose, challenge.agreementInput());
+    }
+
+    static long initialAuthenticationDelayMillis(
+        ProtocolVersion protocol,
+        long loginDelayMillis,
+        long uiDetectionGraceMillis
+    ) {
+        if (protocol == ProtocolVersion.MINECRAFT_1_16_5) {
+            return loginDelayMillis;
+        }
+        return Math.max(loginDelayMillis, uiDetectionGraceMillis);
+    }
+
+    static boolean withinUiDetectionGrace(
+        ProtocolVersion protocol,
+        long uiDetectionGraceMillis,
+        Instant firstPlayAt,
+        Instant now
+    ) {
+        if (protocol == null || protocol == ProtocolVersion.MINECRAFT_1_16_5
+            || uiDetectionGraceMillis <= 0L || firstPlayAt == null || now == null) {
+            return false;
+        }
+        long elapsedMillis = Duration.between(firstPlayAt, now).toMillis();
+        return elapsedMillis >= 0L && elapsedMillis < uiDetectionGraceMillis;
+    }
+
+    static boolean authenticationTypeExpected(AuthMode mode, AuthenticationUiType type) {
+        return mode == AuthMode.AUTO
+            || (mode == AuthMode.LOGIN && type == AuthenticationUiType.LOGIN)
+            || (mode == AuthMode.REGISTER && type == AuthenticationUiType.REGISTER);
+    }
+
+    static boolean shouldRunChatAuthentication(boolean playable, boolean completed, boolean uiActive) {
+        return playable && !completed && !uiActive;
+    }
+
+    private boolean authenticationUiActive() {
+        return authenticationUiFlow.active() || authenticationCommandUiActive.get();
+    }
+
+    private void failAuthenticationUi(long currentGeneration, String stage, String reason) {
+        if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
+            return;
+        }
+        lastAuthenticationUi.set(stage + " failed");
+        lastDisconnectReason = "authentication failed: AUTH_UI " + reason;
+        event("AUTH_UI_FAILED", stage + " - " + reason);
+        logger.warn("Bot {} stopped at {}: {}", definition.id(), stage, reason);
+        stopAfterAuthenticationFailure();
+    }
+
+    private boolean sendLogin() {
+        if (authenticationUiFlow.active()) {
+            return false;
+        }
+        return submitAuthenticationCommand(loginSent, () -> {
             logger.info("Bot {} submitting its login command", definition.id());
-            sendCommand(CommandTemplate.render(definition.auth().loginCommand(), definition));
+            return sendCommand(CommandTemplate.render(definition.auth().loginCommand(), definition));
+        });
+    }
+
+    private boolean sendRegister() {
+        if (authenticationUiFlow.active()) {
+            return false;
+        }
+        return submitAuthenticationCommand(registerSent, () -> {
+            logger.info("Bot {} submitting its registration command", definition.id());
+            return sendCommand(CommandTemplate.render(definition.auth().registerCommand(), definition));
+        });
+    }
+
+    static boolean submitAuthenticationCommand(AtomicBoolean sent, BooleanSupplier sender) {
+        if (!sent.compareAndSet(false, true)) {
+            return false;
+        }
+        boolean submitted = false;
+        try {
+            submitted = sender.getAsBoolean();
+            return submitted;
+        }
+        finally {
+            if (!submitted) {
+                sent.set(false);
+            }
         }
     }
 
-    private void sendRegister() {
-        if (registerSent.compareAndSet(false, true)) {
-            logger.info("Bot {} submitting its registration command", definition.id());
-            sendCommand(CommandTemplate.render(definition.auth().registerCommand(), definition));
+    enum AuthenticationOutcome {
+        PENDING,
+        SUCCESS,
+        FAILURE
+    }
+
+    static final class AuthenticationOutcomeGate {
+        private final AtomicReference<AuthenticationOutcome> outcome =
+            new AtomicReference<>(AuthenticationOutcome.PENDING);
+        private boolean successPendingPlay;
+
+        boolean succeed() {
+            return outcome.compareAndSet(AuthenticationOutcome.PENDING, AuthenticationOutcome.SUCCESS);
+        }
+
+        synchronized boolean succeedBeforePlay() {
+            if (!succeed()) {
+                return false;
+            }
+            successPendingPlay = true;
+            return true;
+        }
+
+        boolean fail() {
+            return outcome.compareAndSet(AuthenticationOutcome.PENDING, AuthenticationOutcome.FAILURE);
+        }
+
+        synchronized boolean consumePrePlaySuccess() {
+            if (outcome.get() != AuthenticationOutcome.SUCCESS || !successPendingPlay) {
+                return false;
+            }
+            successPendingPlay = false;
+            return true;
+        }
+
+        boolean pending() {
+            return outcome.get() == AuthenticationOutcome.PENDING;
+        }
+
+        boolean succeeded() {
+            return outcome.get() == AuthenticationOutcome.SUCCESS;
+        }
+
+        boolean failed() {
+            return outcome.get() == AuthenticationOutcome.FAILURE;
+        }
+
+        AuthenticationOutcome outcome() {
+            return outcome.get();
+        }
+
+        synchronized void reset() {
+            successPendingPlay = false;
+            outcome.set(AuthenticationOutcome.PENDING);
+        }
+    }
+
+    static final class AuthenticationCommandUiTracker {
+        private final EnumSet<AuthenticationUiType> submitted = EnumSet.noneOf(AuthenticationUiType.class);
+
+        synchronized boolean wasSubmitted(AuthenticationUiType type) {
+            return submitted.contains(type);
+        }
+
+        synchronized void recordSubmission(AuthenticationUiType type, boolean submissionSucceeded) {
+            if (submissionSucceeded) {
+                submitted.add(type);
+            }
+        }
+
+        synchronized void reset() {
+            submitted.clear();
         }
     }
 
     private void scheduleAuthCompletion(long currentGeneration) {
-        executor.schedule(() -> completeAuthentication(currentGeneration),
-            definition.auth().afterAuthDelayMillis(), TimeUnit.MILLISECONDS);
+        executor.schedule(() -> {
+            if (!authenticationUiActive()) {
+                completeAuthentication(currentGeneration);
+            }
+        }, definition.auth().afterAuthDelayMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void scheduleAuthCompletionIfNoSuccessPattern(long currentGeneration) {
@@ -545,10 +910,21 @@ public final class BotSession implements BehaviorTarget {
         }
     }
 
-    private void completeAuthentication(long currentGeneration) {
-        if (!isPlayable(currentGeneration) || !authCompleted.compareAndSet(false, true)) {
+    private boolean completeAuthentication(long currentGeneration) {
+        if (!isPlayable(currentGeneration) || !authenticationOutcome.succeed()) {
+            return false;
+        }
+        applyAuthenticationSuccess(currentGeneration);
+        return true;
+    }
+
+    private void applyAuthenticationSuccess(long currentGeneration) {
+        if (!isPlayable(currentGeneration) || !authenticationOutcome.succeeded()) {
             return;
         }
+        authenticationUiFlow.complete();
+        authenticationCommandUiActive.set(false);
+        deferredChatAuthenticationPrompt.set(null);
         cancelAuthenticationTimeout();
         if (!definition.targetServer().isBlank() && !definition.serverSwitchCommand().isBlank()) {
             if (playTransitionsThisConnection.get() > 1) {
@@ -660,7 +1036,7 @@ public final class BotSession implements BehaviorTarget {
         behavior.onUnavailable();
         // An operator-actionable authentication failure is more useful than
         // the synthetic disconnect reason used to close the transport.
-        if (!terminalFailure.get()) {
+        if (!authenticationOutcome.failed()) {
             lastDisconnectReason = reason;
         }
         event("DISCONNECTED", reason);
@@ -671,7 +1047,7 @@ public final class BotSession implements BehaviorTarget {
             logger.info("Bot {} disconnected: {}", definition.id(), reason);
         }
         transport = null;
-        if (terminalFailure.get()) {
+        if (authenticationOutcome.failed()) {
             state.set(BotState.FAILED);
         }
         else if (manualStop.get()) {
@@ -806,6 +1182,14 @@ public final class BotSession implements BehaviorTarget {
         @Override
         public void onAuthenticationUi(AuthenticationUiChallenge challenge) {
             handleAuthenticationUi(currentGeneration, challenge);
+        }
+
+        // TransportListener 2.7 exposes this structured callback for AuthMe's
+        // post-join command-template dialogs. Keeping Dialog text out of prompt
+        // matching prevents a native UI and the chat fallback from racing.
+        @Override
+        public void onAuthenticationCommandUi(AuthenticationUiType type) {
+            handleAuthenticationCommandUi(currentGeneration, type);
         }
 
         @Override

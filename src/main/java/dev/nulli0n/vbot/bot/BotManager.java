@@ -20,6 +20,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
@@ -133,7 +134,14 @@ public final class BotManager implements AutoCloseable {
 
     public boolean start(String id) {
         return find(id).map(session -> {
-            scheduleActivation(session, 0, session::start);
+            replaceActivation(session, session::start);
+            return true;
+        }).orElse(false);
+    }
+
+    public boolean startAutomatically(String id) {
+        return find(id).map(session -> {
+            scheduleActivation(session, 0, session::startAutomatically);
             return true;
         }).orElse(false);
     }
@@ -148,7 +156,14 @@ public final class BotManager implements AutoCloseable {
 
     public boolean reconnect(String id) {
         return find(id).map(session -> {
-            scheduleActivation(session, 0, session::reconnectNow);
+            replaceActivation(session, session::reconnectNow);
+            return true;
+        }).orElse(false);
+    }
+
+    public boolean reconnectAutomatically(String id) {
+        return find(id).map(session -> {
+            scheduleActivation(session, 0, session::reconnectAutomatically);
             return true;
         }).orElse(false);
     }
@@ -228,11 +243,24 @@ public final class BotManager implements AutoCloseable {
     }
 
     private void scheduleActivation(BotSession session, long minimumDelayMillis, Runnable action) {
+        scheduleActivation(session, minimumDelayMillis, action, false);
+    }
+
+    private void replaceActivation(BotSession session, Runnable action) {
+        scheduleActivation(session, 0, action, true);
+    }
+
+    private void scheduleActivation(BotSession session, long minimumDelayMillis, Runnable action,
+                                    boolean replaceExisting) {
         String key = session.definition().id().toLowerCase(Locale.ROOT);
         synchronized (activationLock) {
             ScheduledFuture<?> existing = pendingActivations.get(key);
             if (existing != null && !existing.isDone()) {
-                return;
+                if (!replaceExisting) {
+                    return;
+                }
+                existing.cancel(false);
+                pendingActivations.remove(key, existing);
             }
             long now = System.nanoTime();
             long earliest = now + TimeUnit.MILLISECONDS.toNanos(Math.max(0, minimumDelayMillis));
@@ -240,14 +268,17 @@ public final class BotManager implements AutoCloseable {
             nextActivationNanos = scheduledAt
                 + TimeUnit.MILLISECONDS.toNanos(config.runtime().spawnIntervalMillis());
             long delayNanos = Math.max(0, scheduledAt - now);
+            AtomicReference<ScheduledFuture<?>> scheduled = new AtomicReference<>();
             ScheduledFuture<?> future = executor.schedule(() -> {
+                boolean currentActivation;
                 synchronized (activationLock) {
-                    pendingActivations.remove(key);
+                    currentActivation = pendingActivations.remove(key, scheduled.get());
                 }
-                if (sessions.get(key) == session) {
+                if (currentActivation && sessions.get(key) == session) {
                     action.run();
                 }
             }, delayNanos, TimeUnit.NANOSECONDS);
+            scheduled.set(future);
             pendingActivations.put(key, future);
         }
     }

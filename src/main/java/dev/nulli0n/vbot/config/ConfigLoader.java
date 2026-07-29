@@ -16,6 +16,7 @@ import dev.nulli0n.vbot.config.BotPluginConfig.ManagedGameMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.PlayerStateConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.ReconnectConfig;
+import dev.nulli0n.vbot.config.BotPluginConfig.RegistrationSecondArgument;
 import dev.nulli0n.vbot.config.BotPluginConfig.RespawnPointConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.RespawnPointMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.ResourcePackMode;
@@ -43,6 +44,12 @@ import java.util.Map;
 import java.util.Set;
 
 public final class ConfigLoader {
+    private static final List<String> DEFAULT_AUTH_SUCCESS_MESSAGES = List.of(
+        "(?i)(account registered successfully|successfully registered|logged in successfully|"
+            + "login successful|successful login|successfully logged|logged-in due to session reconnection|"
+            + "login session continued|already logged in|^authenticated$|登录成功|注册成功|认证成功)"
+    );
+
     private ConfigLoader() {
     }
 
@@ -181,6 +188,7 @@ public final class ConfigLoader {
             String id = entry.getKey();
             Map<String, Object> bot = resolveBot(entry.getValue(), id, templates);
             Map<String, Object> auth = section(bot, "auth");
+            Map<String, Object> authMeUi = section(auth, "authmeui");
             AuthConfig authConfig = new AuthConfig(
                 enumValue(AuthMode.class, text(auth, "mode", "AUTO"), "bots." + id + ".auth.mode"),
                 text(auth, "login-command", "login {password}"),
@@ -190,9 +198,17 @@ public final class ConfigLoader {
                 longValue(auth, "after-auth-delay-ms", 1_500, 0, 60_000),
                 stringList(auth.get("login-prompts")),
                 stringList(auth.get("register-prompts")),
-                stringList(auth.get("success-messages")),
+                auth.containsKey("success-messages")
+                    ? stringList(auth.get("success-messages"))
+                    : DEFAULT_AUTH_SUCCESS_MESSAGES,
                 stringList(auth.get("failure-messages")),
-                longValue(auth, "timeout-ms", 30_000, 0, 3_600_000)
+                longValue(auth, "timeout-ms", 30_000, 0, 3_600_000),
+                bool(authMeUi, "accept-rules", true),
+                text(authMeUi, "registration-email", ""),
+                enumValue(RegistrationSecondArgument.class,
+                    text(authMeUi, "registration-second-argument", "AUTO"),
+                    "bots." + id + ".auth.authmeui.registration-second-argument"),
+                longValue(authMeUi, "ui-detection-grace-ms", 3_000L, 0L, 60_000L)
             );
             String username = text(bot, "username", id);
             validateUsername(username, id);
