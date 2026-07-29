@@ -409,6 +409,9 @@ post-join Dialog 有机会出现；一旦识别到 UI，就不会再抢先发送
 可恢复立即使用聊天认证的旧行为。Dialog 的标题、正文和按钮文字只用于显示/字段语义判断，绝不会被当作
 登录成功、失败或聊天提示的证据。
 
+`after-auth-delay-ms` 会在 AuthMeUI Dialog、聊天成功消息及 AuthMe session 恢复被确认后统一生效；
+默认的短暂等待可避免机器人刚进入 PLAY、初始数据包尚未处理完就立即跨服。只有确实需要时才建议设为 `0`。
+
 AuthMeUI 默认可以尊重 AuthMe session。启用 `configuration-phase-respect-authme-sessions` 后，有效 session
 不会再展示登录 Dialog；AuthMeUI 1.3.4 会把检查延后到玩家加入，随后 AuthMe 发送
 `Logged-in due to Session Reconnection.`。Bots4Velo 即使已进入 PLAY，也会继续锁住切服与挂机行为，直到匹配

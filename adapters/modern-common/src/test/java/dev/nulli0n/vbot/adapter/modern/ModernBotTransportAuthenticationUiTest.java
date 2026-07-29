@@ -7,8 +7,10 @@ import dev.nulli0n.vbot.transport.AuthenticationUiType;
 import dev.nulli0n.vbot.transport.TransportConfig;
 import dev.nulli0n.vbot.transport.TransportListener;
 import dev.nulli0n.vbot.transport.TransportState;
+import io.netty.util.concurrent.OrderedEventExecutor;
 import org.cloudburstmc.nbt.NbtMap;
 import org.cloudburstmc.nbt.NbtType;
+import org.geysermc.mcprotocollib.network.ClientSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -20,6 +22,22 @@ import java.util.concurrent.ScheduledExecutorService;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ModernBotTransportAuthenticationUiTest {
+
+    @Test
+    void keepsProtocolPacketHandlingOffTheSharedBotScheduler() {
+        RecordingListener listener = new RecordingListener();
+        ScheduledExecutorService sharedScheduler = Executors.newScheduledThreadPool(4);
+        try {
+            ClientSession session = transport(listener, sharedScheduler).createClientSession();
+
+            assertThat(session.getPacketHandlerExecutor())
+                .isNotSameAs(sharedScheduler)
+                .isInstanceOf(OrderedEventExecutor.class);
+        }
+        finally {
+            sharedScheduler.shutdownNow();
+        }
+    }
 
     @Test
     void recognizesAuthMeUi134CustomClickCompound() {

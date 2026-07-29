@@ -465,7 +465,9 @@ bots:
       login-delay-ms: 250
       # AuthMe 5.6 legacy throttles a registration immediately following /login.
       fallback-register-delay-ms: 1500
-      after-auth-delay-ms: 250
+      # AuthMe can emit a session-success message in the same tick as PLAY.
+      # Use the production default settle period before the first cross-server move.
+      after-auth-delay-ms: 1500
       timeout-ms: 30000
       login-prompts: ["(?i)(please login|/login)"]
       register-prompts: ["(?i)(please register|/register)"]
@@ -678,6 +680,7 @@ wait_for_log "$VELOCITY_LOG" \
 if [[ "$MINECRAFT_VERSION" != "1.16.5" ]]; then
   log "Authentication mode test: honor an AuthMe session during AuthMeUI pre-join"
   restart_lobby_with_authmeui_pre_join_session
+  session_afk_log_lines="$(wc -l < "$WORK_ROOT/afk/console.log")"
   restart_velocity
   wait_for_log "$VELOCITY_LOG" 'Bot IntegrationBot entered PLAY' 90
   session_play_line="$(last_matching_log_line "$VELOCITY_LOG" 'Bot IntegrationBot entered PLAY')"
@@ -692,12 +695,14 @@ if [[ "$MINECRAFT_VERSION" != "1.16.5" ]]; then
     'resource pack: SUCCESSFULLY_LOADED' 90
   wait_for_new_log "$VELOCITY_LOG" \
     "B4VCI_${PROTOCOL_ID} -> afk has connected" "$session_success_line" 90
+  wait_for_new_log "$WORK_ROOT/afk/console.log" \
+    "B4VCI_${PROTOCOL_ID} joined the game" "$session_afk_log_lines" 90
   if grep -Eq 'Bot IntegrationBot (submitted AUTHME_UI|submitting its (login|registration) command)' \
       "$VELOCITY_LOG"; then
     die "AuthMeUI session-respect fixture unexpectedly submitted credentials"
   fi
-  wait_for_log "$VELOCITY_LOG" \
-    'Paper backend control APPLY_POLICY_EXT for bot IntegrationBot on afk: OK' 90
+  wait_for_new_log "$VELOCITY_LOG" \
+    'Paper backend control APPLY_POLICY_EXT for bot IntegrationBot on afk: OK' "$session_success_line" 90
 fi
 
 log "Integration passed: Minecraft $MINECRAFT_VERSION / protocol $PROTOCOL_ID"

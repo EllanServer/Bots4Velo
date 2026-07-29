@@ -49,6 +49,7 @@ public final class BotSession implements BehaviorTarget {
     private final Logger logger;
     private final ReconnectPolicy reconnectPolicy;
     private final BotBehaviorRunner behavior;
+    private final AuthenticationSettleGate authenticationSettle;
     private final BotEventLog events;
     private final Consumer<BotEvent> eventSink;
     private final AtomicReference<BotState> state = new AtomicReference<>(BotState.STOPPED);
@@ -59,6 +60,7 @@ public final class BotSession implements BehaviorTarget {
     private final AtomicBoolean loginSent = new AtomicBoolean();
     private final AtomicBoolean registerSent = new AtomicBoolean();
     private final AuthenticationOutcomeGate authenticationOutcome = new AuthenticationOutcomeGate();
+    private final AtomicBoolean authenticationContinuationApplied = new AtomicBoolean();
     private final AuthenticationUiFlow authenticationUiFlow = new AuthenticationUiFlow();
     private final AtomicBoolean authenticationCommandUiActive = new AtomicBoolean();
     private final AuthenticationCommandUiTracker authenticationCommandUiTracker =
@@ -117,6 +119,7 @@ public final class BotSession implements BehaviorTarget {
         this.events = new BotEventLog(definition.id());
         this.reconnectPolicy = new ReconnectPolicy(runtime.reconnect());
         this.behavior = new BotBehaviorRunner(this, definition.behavior(), executor, logger);
+        this.authenticationSettle = new AuthenticationSettleGate(executor);
         this.loginPrompts = compile(definition.auth().loginPrompts());
         this.registerPrompts = compile(definition.auth().registerPrompts());
         this.successMessages = compile(definition.auth().successMessages());
@@ -188,6 +191,7 @@ public final class BotSession implements BehaviorTarget {
         cancelReconnect();
         cancelServerSwitch();
         cancelAuthenticationTimeout();
+        authenticationSettle.cancel();
         behavior.onUnavailable();
         BotTransport active = transport;
         transport = null;
@@ -207,10 +211,11 @@ public final class BotSession implements BehaviorTarget {
     private void reconnectInternal(String source) {
         manualStop.set(false);
         event("RECONNECT_REQUESTED", source);
+        generation.incrementAndGet();
         cancelReconnect();
         cancelServerSwitch();
+        authenticationSettle.cancel();
         behavior.onUnavailable();
-        generation.incrementAndGet();
         BotTransport active = transport;
         transport = null;
         connectedAt = null;
@@ -271,7 +276,7 @@ public final class BotSession implements BehaviorTarget {
     }
 
     public boolean isAuthenticationComplete() {
-        return authenticationOutcome.succeeded();
+        return authenticationOutcome.succeeded() && authenticationContinuationApplied.get();
     }
 
     public void startBehavior() {
@@ -365,10 +370,12 @@ public final class BotSession implements BehaviorTarget {
     private void resetConnectionState() {
         cancelServerSwitch();
         cancelAuthenticationTimeout();
+        authenticationSettle.cancel();
         connectedAt = null;
         loginSent.set(false);
         registerSent.set(false);
         authenticationOutcome.reset();
+        authenticationContinuationApplied.set(false);
         authenticationUiFlow.reset();
         authenticationCommandUiActive.set(false);
         authenticationCommandUiTracker.reset();
@@ -421,12 +428,12 @@ public final class BotSession implements BehaviorTarget {
                     event("PLAY", activeProtocol);
                 }
                 if (firstPlay && authenticationOutcome.consumePrePlaySuccess()) {
-                    logger.info("Bot {} applied authentication success received before PLAY", definition.id());
+                    logger.info("Bot {} accepted authentication success received before PLAY", definition.id());
                     event("AUTHENTICATED", "success message received before PLAY");
-                    applyAuthenticationSuccess(currentGeneration);
+                    scheduleAuthenticationSuccess(currentGeneration);
                 }
                 else if (authenticationUiFlow.credentialReadyOnPlay()) {
-                    if (completeAuthentication(currentGeneration)) {
+                    if (completeAuthenticationAfterSettle(currentGeneration)) {
                         logger.info("Bot {} completed authentication UI after entering PLAY", definition.id());
                         event("AUTHENTICATED", lastAuthenticationUi.get() + " entered PLAY");
                     }
@@ -442,7 +449,7 @@ public final class BotSession implements BehaviorTarget {
                 else if (serverSwitchPending.get() && isConfirmedServerTransition()) {
                     completeServerSwitch(currentGeneration);
                 }
-                else if (authenticationOutcome.succeeded()) {
+                else if (authenticationOutcome.succeeded() && authenticationContinuationApplied.get()) {
                     behavior.onReady();
                 }
             }
@@ -504,7 +511,7 @@ public final class BotSession implements BehaviorTarget {
         else if (matches(successMessages, message)) {
             logger.info("Bot {} matched an authentication success message", definition.id());
             if (isPlayable(currentGeneration)) {
-                if (completeAuthentication(currentGeneration)) {
+                if (completeAuthenticationAfterSettle(currentGeneration)) {
                     event("AUTHENTICATED", "success message");
                 }
             }
@@ -587,6 +594,7 @@ public final class BotSession implements BehaviorTarget {
 
     private synchronized void stopAfterAuthenticationFailure() {
         cancelAuthenticationTimeout();
+        authenticationSettle.cancel();
         authenticationInterventionRequired.set(true);
         manualStop.set(true);
         cancelReconnect();
@@ -918,8 +926,45 @@ public final class BotSession implements BehaviorTarget {
         return true;
     }
 
+    private boolean completeAuthenticationAfterSettle(long currentGeneration) {
+        if (!isPlayable(currentGeneration) || !authenticationOutcome.succeed()) {
+            return false;
+        }
+        scheduleAuthenticationSuccess(currentGeneration);
+        return true;
+    }
+
+    /**
+     * Gives the freshly admitted client time to finish its first PLAY packets
+     * before a successful authentication immediately moves it to another
+     * backend. This is especially important for AuthMe session restoration:
+     * its success message can arrive in the same tick as the initial join.
+     */
+    private void scheduleAuthenticationSuccess(long currentGeneration) {
+        cancelAuthenticationTimeout();
+        long delay = definition.auth().afterAuthDelayMillis();
+        authenticationSettle.scheduleUntilComplete(delay, 250,
+            () -> applyAuthenticationSuccessWhenPlayable(currentGeneration));
+    }
+
+    private boolean applyAuthenticationSuccessWhenPlayable(long currentGeneration) {
+        if (!isCurrent(currentGeneration) || !authenticationOutcome.succeeded()) {
+            return true;
+        }
+        BotTransport active = transport;
+        if (active == null || !active.isConnected()) {
+            return true;
+        }
+        if (!isPlayable(currentGeneration)) {
+            return false;
+        }
+        applyAuthenticationSuccess(currentGeneration);
+        return true;
+    }
+
     private void applyAuthenticationSuccess(long currentGeneration) {
-        if (!isPlayable(currentGeneration) || !authenticationOutcome.succeeded()) {
+        if (!isPlayable(currentGeneration) || !authenticationOutcome.succeeded()
+            || !authenticationContinuationApplied.compareAndSet(false, true)) {
             return;
         }
         authenticationUiFlow.complete();
@@ -954,6 +999,11 @@ public final class BotSession implements BehaviorTarget {
             return;
         }
         if (!isPlayable(currentGeneration)) {
+            BotTransport active = transport;
+            if (active == null || !active.isConnected()) {
+                serverSwitchPending.set(false);
+                return;
+            }
             serverSwitchTask = executor.schedule(() -> attemptServerSwitch(currentGeneration),
                 250, TimeUnit.MILLISECONDS);
             return;
@@ -1033,6 +1083,7 @@ public final class BotSession implements BehaviorTarget {
         protocolResolver.invalidateAutomaticDetection();
         cancelServerSwitch();
         cancelAuthenticationTimeout();
+        authenticationSettle.cancel();
         behavior.onUnavailable();
         // An operator-actionable authentication failure is more useful than
         // the synthetic disconnect reason used to close the transport.

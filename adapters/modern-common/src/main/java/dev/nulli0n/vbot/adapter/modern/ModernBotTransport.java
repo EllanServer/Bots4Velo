@@ -117,12 +117,7 @@ final class ModernBotTransport implements BotTransport {
 
     @Override
     public void connect() {
-        MinecraftProtocol protocol = new MinecraftProtocol(new GameProfile(config.uuid(), config.username()), null);
-        ClientSession created = ClientNetworkSessionFactory.factory()
-            .setAddress(config.address(), config.port())
-            .setProtocol(protocol)
-            .setPacketHandlerExecutor(executor)
-            .create();
+        ClientSession created = createClientSession();
         created.setFlag(MinecraftConstants.CLIENT_HOST, config.virtualHost());
         created.setFlag(MinecraftConstants.CLIENT_PORT, config.virtualPort());
         created.setFlag(MinecraftConstants.AUTOMATIC_KEEP_ALIVE_MANAGEMENT, true);
@@ -130,6 +125,17 @@ final class ModernBotTransport implements BotTransport {
         created.addListener(new PacketListener());
         session = created;
         created.connect(false);
+    }
+
+    ClientSession createClientSession() {
+        MinecraftProtocol protocol = new MinecraftProtocol(new GameProfile(config.uuid(), config.username()), null);
+        // MCProtocolLib's default executor is a serial event loop selected for
+        // this session. Login, configuration and PLAY state transitions must
+        // never run concurrently on Bots4Velo's shared scheduling pool.
+        return ClientNetworkSessionFactory.factory()
+            .setAddress(config.address(), config.port())
+            .setProtocol(protocol)
+            .create();
     }
 
     @Override
