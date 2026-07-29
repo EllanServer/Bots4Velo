@@ -84,11 +84,33 @@ class SignedResponseCacheTest {
         assertEquals(SignedResponseCache.Match.MISS, cache.lookup(second, secondFrame, now + 100L).match());
     }
 
+    @Test
+    void recoverRetryIsIdempotentlyBoundToItsSignedResponse() throws Exception {
+        long now = 1_000_000L;
+        SignedResponseCache cache = new SignedResponseCache(30_000L, 10);
+        ControlRequest request = request(UUID.randomUUID(), (byte) 3, BackendOperation.RECOVER);
+        byte[] signedRequest = ProtocolCodec.encodeRequest(request, SECRET);
+        byte[] acknowledgement = ProtocolCodec.encodeResponse(
+            ControlResponse.reply(request, BackendStatus.OK, "recovered", ActualState.absent()), SECRET);
+
+        assertTrue(cache.begin(request, signedRequest, now));
+        assertTrue(cache.complete(request, acknowledgement, now));
+
+        assertArrayEquals(acknowledgement,
+            cache.lookup(request, signedRequest, now + 1L).response());
+        assertEquals(BackendOperation.RECOVER,
+            ProtocolCodec.decodeResponse(acknowledgement, SECRET).operation());
+    }
+
     private static ControlRequest request(UUID requestId, byte nonceMarker) {
+        return request(requestId, nonceMarker, BackendOperation.PROBE);
+    }
+
+    private static ControlRequest request(UUID requestId, byte nonceMarker, BackendOperation operation) {
         byte[] nonce = new byte[ControlRequest.NONCE_BYTES];
         nonce[0] = nonceMarker;
         return new ControlRequest(requestId,
             UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), 1_000_000L, nonce,
-            BackendOperation.PROBE, null);
+            operation, null);
     }
 }

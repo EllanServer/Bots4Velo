@@ -16,6 +16,7 @@ import java.util.UUID;
 
 public final class ProtocolCodec {
     public static final int VERSION = 1;
+    public static final int EXTENSION_VERSION = 1;
     public static final int MAX_FRAME_BYTES = 16 * 1024;
 
     private static final int MAGIC = 0x42345643; // B4VC
@@ -40,6 +41,12 @@ public final class ProtocolCodec {
             if (request.operation() == BackendOperation.APPLY_POLICY) {
                 writePolicy(output, request.policy());
             }
+            else if (isExtended(request.operation())) {
+                output.writeByte(EXTENSION_VERSION);
+                if (request.operation() == BackendOperation.APPLY_POLICY_EXT) {
+                    writeExtendedPolicy(output, request.policy());
+                }
+            }
             output.flush();
             return signFrame(KIND_REQUEST, bytes.toByteArray(), secret);
         }
@@ -58,7 +65,16 @@ public final class ProtocolCodec {
             byte[] nonce = new byte[ControlRequest.NONCE_BYTES];
             input.readFully(nonce);
             BackendOperation operation = BackendOperation.fromId(input.readUnsignedByte());
-            BackendPolicy policy = operation == BackendOperation.APPLY_POLICY ? readPolicy(input) : null;
+            BackendPolicy policy = null;
+            if (operation == BackendOperation.APPLY_POLICY) {
+                policy = readPolicy(input);
+            }
+            else if (isExtended(operation)) {
+                requireExtensionVersion(input);
+                if (operation == BackendOperation.APPLY_POLICY_EXT) {
+                    policy = readExtendedPolicy(input);
+                }
+            }
             requireEnd(input);
             return new ControlRequest(requestId, targetUuid, timestamp, nonce, operation, policy);
         }
@@ -85,6 +101,9 @@ public final class ProtocolCodec {
             output.writeByte(response.status().id());
             writeString(output, response.detail());
             writeActualState(output, response.actualState());
+            if (isExtended(response.operation())) {
+                writeExtendedActualState(output, response.actualState());
+            }
             output.flush();
             return signFrame(KIND_RESPONSE, bytes.toByteArray(), secret);
         }
@@ -106,6 +125,9 @@ public final class ProtocolCodec {
             BackendStatus status = BackendStatus.fromId(input.readUnsignedByte());
             String detail = readString(input);
             ActualState actual = readActualState(input);
+            if (isExtended(operation)) {
+                actual = readExtendedActualState(input, actual);
+            }
             requireEnd(input);
             return new ControlResponse(requestId, targetUuid, timestamp, requestNonce,
                 operation, status, detail, actual);
@@ -215,6 +237,24 @@ public final class ProtocolCodec {
         return new BackendPolicy(invulnerability, gameMode, readRespawnPoint(input));
     }
 
+    private static void writeExtendedPolicy(DataOutputStream output, BackendPolicy policy) throws IOException {
+        writePolicy(output, policy);
+        output.writeByte(policy.sleepingIgnored().id());
+        output.writeByte(policy.affectsSpawning().id());
+        output.writeByte(policy.pickupItems().id());
+        output.writeByte(policy.collidable().id());
+    }
+
+    private static BackendPolicy readExtendedPolicy(DataInputStream input)
+        throws IOException, ProtocolException {
+        BackendPolicy base = readPolicy(input);
+        return new BackendPolicy(base.invulnerability(), base.gameMode(), base.respawnPoint(),
+            ManagedBoolean.fromId(input.readUnsignedByte()),
+            ManagedBoolean.fromId(input.readUnsignedByte()),
+            ManagedBoolean.fromId(input.readUnsignedByte()),
+            ManagedBoolean.fromId(input.readUnsignedByte()));
+    }
+
     private static void writeActualState(DataOutputStream output, ActualState state) throws IOException {
         output.writeBoolean(state.present());
         if (!state.present()) {
@@ -232,6 +272,47 @@ public final class ProtocolCodec {
         boolean invulnerable = input.readBoolean();
         BackendGameMode gameMode = BackendGameMode.fromId(input.readUnsignedByte());
         return ActualState.present(invulnerable, gameMode, readRespawnPoint(input));
+    }
+
+    private static void writeExtendedActualState(DataOutputStream output, ActualState state) throws IOException {
+        output.writeByte(EXTENSION_VERSION);
+        output.writeBoolean(state.extendedPresent());
+        if (!state.extendedPresent()) {
+            return;
+        }
+        output.writeBoolean(state.sleepingIgnored());
+        output.writeBoolean(state.affectsSpawning());
+        output.writeBoolean(state.pickupItems());
+        output.writeBoolean(state.collidable());
+    }
+
+    private static ActualState readExtendedActualState(DataInputStream input, ActualState base)
+        throws IOException, ProtocolException {
+        requireExtensionVersion(input);
+        if (!input.readBoolean()) {
+            return base;
+        }
+        if (!base.present()) {
+            throw new ProtocolException(BackendStatus.BAD_REQUEST,
+                "Extended actual state requires a present base state");
+        }
+        return ActualState.presentExtended(base.invulnerable(), base.gameMode(), base.respawnPoint(),
+            input.readBoolean(), input.readBoolean(), input.readBoolean(), input.readBoolean());
+    }
+
+    private static void requireExtensionVersion(DataInputStream input)
+        throws IOException, ProtocolException {
+        int extensionVersion = input.readUnsignedByte();
+        if (extensionVersion != EXTENSION_VERSION) {
+            throw new ProtocolException(BackendStatus.VERSION_MISMATCH,
+                "Unsupported protocol extension version " + extensionVersion);
+        }
+    }
+
+    private static boolean isExtended(BackendOperation operation) {
+        return operation == BackendOperation.PROBE_EXT
+            || operation == BackendOperation.APPLY_POLICY_EXT
+            || operation == BackendOperation.RECOVER;
     }
 
     private static void writeRespawnPoint(DataOutputStream output, RespawnPoint point) throws IOException {

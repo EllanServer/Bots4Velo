@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -348,6 +349,96 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void expandsAfkPresetsAfterTemplateMergingAndHonorsExplicitOverrides() {
+        BotPluginConfig config = parse("""
+            templates:
+              safe-afk:
+                player-state:
+                  afk-preset: SAFE
+                  game-mode: ADVENTURE
+            bots:
+              Safe01:
+                template: safe-afk
+                username: AFK_Safe01
+                password: secret
+                player-state:
+                  invulnerable: DISABLED
+                  pickup-items: ENABLED
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  afk-preset: FARM
+              Normal01:
+                username: AFK_Normal01
+                password: secret
+                player-state:
+                  afk-preset: NORMAL
+            """);
+
+        BotPluginConfig.PlayerStateConfig safe = config.bots().get("safe01").playerState();
+        assertThat(safe.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.SAFE);
+        assertThat(safe.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.DISABLED);
+        assertThat(safe.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(safe.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.KEEP);
+        assertThat(safe.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(safe.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(safe.gameMode()).isEqualTo(BotPluginConfig.ManagedGameMode.ADVENTURE);
+
+        BotPluginConfig.PlayerStateConfig farm = config.bots().get("farm01").playerState();
+        assertThat(farm.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.FARM);
+        assertThat(farm.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.ENABLED);
+        assertThat(farm.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(farm.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(farm.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(farm.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(farm.gameMode()).isEqualTo(BotPluginConfig.ManagedGameMode.KEEP);
+
+        BotPluginConfig.PlayerStateConfig normal = config.bots().get("normal01").playerState();
+        assertThat(normal.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.NORMAL);
+        assertThat(normal.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.DISABLED);
+        assertThat(normal.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(normal.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(normal.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(normal.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+    }
+
+    @Test
+    void bundledConfigAllowsChangingOnlyTheAfkPreset() throws IOException {
+        String bundled;
+        try (InputStream stream = ConfigLoaderTest.class.getClassLoader().getResourceAsStream("config.yml")) {
+            assertThat(stream).isNotNull();
+            bundled = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        BotPluginConfig config = parse(bundled
+            .replace("afk-preset: \"NONE\"", "afk-preset: \"FARM\"")
+            .replace("password-secret: \"iron-farm-01\"", "password: \"secret\""));
+
+        BotPluginConfig.PlayerStateConfig farm = config.bots().get("ironfarm01").playerState();
+        assertThat(farm.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.FARM);
+        assertThat(farm.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.ENABLED);
+        assertThat(farm.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(farm.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
+        assertThat(farm.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(farm.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+    }
+
+    @Test
+    void keepsOriginalPlayerStateConstructorSourceCompatible() {
+        BotPluginConfig.PlayerStateConfig state = new BotPluginConfig.PlayerStateConfig(
+            BotPluginConfig.InvulnerabilityMode.ENABLED,
+            BotPluginConfig.ManagedGameMode.SURVIVAL,
+            250L,
+            BotPluginConfig.RespawnPointConfig.unchanged());
+
+        assertThat(state.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.NONE);
+        assertThat(state.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.KEEP);
+        assertThat(state.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.KEEP);
+        assertThat(state.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.KEEP);
+        assertThat(state.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.KEEP);
+    }
+
+    @Test
     void validatesPlayerStateEnumsAndFixedRespawnPoint() {
         assertThatThrownBy(() -> parse("""
             bots:
@@ -359,6 +450,28 @@ class ConfigLoaderTest {
             """))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("player-state.game-mode");
+
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  afk-preset: TURBO
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("player-state.afk-preset");
+
+        assertThatThrownBy(() -> parse("""
+            bots:
+              Farm01:
+                username: AFK_Farm01
+                password: secret
+                player-state:
+                  pickup-items: SOMETIMES
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("player-state.pickup-items");
 
         assertThatThrownBy(() -> parse("""
             bots:

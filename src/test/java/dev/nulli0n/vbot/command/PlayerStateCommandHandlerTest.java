@@ -7,7 +7,9 @@ import dev.nulli0n.vbot.backend.InvulnerabilityChange;
 import dev.nulli0n.vbot.backend.protocol.ActualState;
 import dev.nulli0n.vbot.backend.protocol.BackendGameMode;
 import dev.nulli0n.vbot.backend.protocol.BackendStatus;
+import dev.nulli0n.vbot.backend.protocol.ManagedBoolean;
 import dev.nulli0n.vbot.backend.protocol.RespawnMode;
+import dev.nulli0n.vbot.backend.protocol.RespawnPoint;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -94,6 +96,151 @@ class PlayerStateCommandHandlerTest {
     }
 
     @Test
+    void afkPresetsExpandIntoExplicitPracticalPolicies() {
+        RecordingBackend backend = new RecordingBackend();
+        PlayerStateCommandHandler handler = handler(backend);
+
+        handler.execute("afk", new String[]{"afk", "bot", "preset", "safe"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "preset", "farm"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "preset", "normal"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "unmanage"}).join();
+
+        BackendControlPatch safe = backend.applied.get(0).patch();
+        assertThat(safe.invulnerability()).isEqualTo(InvulnerabilityChange.ENABLED);
+        assertThat(safe.sleepingIgnored()).isEqualTo(ManagedBoolean.ENABLED);
+        assertThat(safe.affectsSpawning()).isEqualTo(ManagedBoolean.UNCHANGED);
+        assertThat(safe.pickupItems()).isEqualTo(ManagedBoolean.DISABLED);
+        assertThat(safe.collidable()).isEqualTo(ManagedBoolean.DISABLED);
+
+        BackendControlPatch farm = backend.applied.get(1).patch();
+        assertThat(farm.affectsSpawning()).isEqualTo(ManagedBoolean.ENABLED);
+
+        BackendControlPatch normal = backend.applied.get(2).patch();
+        assertThat(normal.invulnerability()).isEqualTo(InvulnerabilityChange.DISABLED);
+        assertThat(normal.sleepingIgnored()).isEqualTo(ManagedBoolean.DISABLED);
+        assertThat(normal.affectsSpawning()).isEqualTo(ManagedBoolean.ENABLED);
+        assertThat(normal.pickupItems()).isEqualTo(ManagedBoolean.ENABLED);
+        assertThat(normal.collidable()).isEqualTo(ManagedBoolean.ENABLED);
+
+        BackendControlPatch unmanaged = backend.applied.get(3).patch();
+        assertThat(unmanaged.invulnerability()).isEqualTo(InvulnerabilityChange.KEEP);
+        assertThat(unmanaged.sleepingIgnored()).isEqualTo(ManagedBoolean.UNCHANGED);
+        assertThat(unmanaged.affectsSpawning()).isEqualTo(ManagedBoolean.UNCHANGED);
+        assertThat(unmanaged.pickupItems()).isEqualTo(ManagedBoolean.UNCHANGED);
+        assertThat(unmanaged.collidable()).isEqualTo(ManagedBoolean.UNCHANGED);
+    }
+
+    @Test
+    void afkSetMapsEveryPropertyAndManagedValue() {
+        RecordingBackend backend = new RecordingBackend();
+        PlayerStateCommandHandler handler = handler(backend);
+
+        handler.execute("afk", new String[]{"afk", "bot", "set", "sleep-ignored", "on"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "set", "affects-spawning", "keep"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "set", "pickup", "off"}).join();
+        handler.execute("afk", new String[]{"afk", "bot", "set", "collision", "on"}).join();
+
+        assertThat(backend.applied.get(0).patch()).satisfies(patch -> {
+            assertThat(patch.sleepingIgnoredPresent()).isTrue();
+            assertThat(patch.sleepingIgnored()).isEqualTo(ManagedBoolean.ENABLED);
+            assertThat(patch.affectsSpawningPresent()).isFalse();
+            assertThat(patch.pickupItemsPresent()).isFalse();
+            assertThat(patch.collidablePresent()).isFalse();
+        });
+        assertThat(backend.applied.get(1).patch()).satisfies(patch -> {
+            assertThat(patch.affectsSpawningPresent()).isTrue();
+            assertThat(patch.affectsSpawning()).isEqualTo(ManagedBoolean.UNCHANGED);
+        });
+        assertThat(backend.applied.get(2).patch()).satisfies(patch -> {
+            assertThat(patch.pickupItemsPresent()).isTrue();
+            assertThat(patch.pickupItems()).isEqualTo(ManagedBoolean.DISABLED);
+        });
+        assertThat(backend.applied.get(3).patch()).satisfies(patch -> {
+            assertThat(patch.collidablePresent()).isTrue();
+            assertThat(patch.collidable()).isEqualTo(ManagedBoolean.ENABLED);
+        });
+        assertThat(backend.applied).allSatisfy(call ->
+            assertThat(call.patch().invulnerabilityPresent()).isFalse());
+    }
+
+    @Test
+    void afkStatusUsesProbeAndPrintsExtendedActualState() {
+        RecordingBackend backend = new RecordingBackend();
+
+        PlayerStateCommandHandler.Reply reply = handler(backend).execute("afk",
+            new String[]{"afk", "bot", "status"}).join();
+
+        assertThat(backend.probed).containsExactly("bot");
+        assertThat(backend.applied).isEmpty();
+        assertThat(reply.severity()).isEqualTo(PlayerStateCommandHandler.Severity.SUCCESS);
+        assertThat(reply.lines()).hasSize(2);
+        assertThat(reply.lines().get(1))
+            .contains("bot: invulnerable=true")
+            .contains("sleepIgnored=true")
+            .contains("affectsSpawning=false")
+            .contains("pickup=false")
+            .contains("collidable=false");
+    }
+
+    @Test
+    void afkStatusReportsWhenBatchDetailsAreTruncated() {
+        RecordingBackend backend = new RecordingBackend();
+        List<String> bots = new ArrayList<>();
+        for (int index = 1; index <= 12; index++) {
+            bots.add("bot" + index);
+        }
+        PlayerStateCommandHandler handler = new PlayerStateCommandHandler(backend,
+            selector -> selector.equals("all") ? bots : List.of());
+
+        PlayerStateCommandHandler.Reply reply = handler.execute("afk",
+            new String[]{"afk", "all", "status"}).join();
+
+        assertThat(reply.lines()).hasSize(12);
+        assertThat(reply.lines().getLast()).isEqualTo("... and 2 more status result(s).");
+    }
+
+    @Test
+    void afkStatusMarksLegacyCompanionStateAsLimited() {
+        BackendControlService legacy = new BackendControlService() {
+            @Override
+            public CompletionStage<BackendControlResult> probe(String botId) {
+                return CompletableFuture.completedFuture(new BackendControlResult(botId,
+                    BackendStatus.OK, "legacy", ActualState.present(false,
+                    BackendGameMode.SURVIVAL, RespawnPoint.clear())));
+            }
+
+            @Override
+            public CompletionStage<BackendControlResult> apply(String botId, BackendControlPatch patch) {
+                return CompletableFuture.completedFuture(ok(botId));
+            }
+
+            @Override
+            public CompletionStage<BackendControlResult> respawn(String botId) {
+                return CompletableFuture.completedFuture(ok(botId));
+            }
+        };
+
+        PlayerStateCommandHandler.Reply reply = new PlayerStateCommandHandler(legacy,
+            selector -> List.of("legacy-bot")).execute("afk",
+            new String[]{"afk", "legacy-bot", "status"}).join();
+
+        assertThat(reply.lines().get(1)).contains("legacy-bot:").contains("extendedAfk=unavailable");
+    }
+
+    @Test
+    void recoverUsesDedicatedIdempotentBackendOperation() {
+        RecordingBackend backend = new RecordingBackend();
+
+        PlayerStateCommandHandler.Reply reply = handler(backend).execute("recover",
+            new String[]{"recover", "bot"}).join();
+
+        assertThat(backend.recovered).containsExactly("bot");
+        assertThat(backend.respawned).isEmpty();
+        assertThat(backend.applied).isEmpty();
+        assertThat(reply.lines().getFirst()).isEqualTo("Recovery request acknowledged by 1/1 bot(s).");
+    }
+
+    @Test
     void reportsInputErrorsWithoutCallingTheBackend() {
         RecordingBackend backend = new RecordingBackend();
         PlayerStateCommandHandler handler = handler(backend);
@@ -103,12 +250,15 @@ class PlayerStateCommandHandlerTest {
         var invalidCoordinate = handler.execute("spawnpoint",
             new String[]{"spawnpoint", "bot", "set", "world", "NaN", "64", "0"}).join();
         var invalidArity = handler.execute("respawn", new String[]{"respawn"}).join();
+        var invalidAfkProperty = handler.execute("afk",
+            new String[]{"afk", "bot", "set", "weather", "on"}).join();
 
         assertThat(invalidMode.severity()).isEqualTo(PlayerStateCommandHandler.Severity.ERROR);
         assertThat(invalidMode.lines().getFirst()).contains("survival").contains("unchanged");
         assertThat(invalidCoordinate.lines()).containsExactly("x must be a finite number.");
         assertThat(invalidArity.severity()).isEqualTo(PlayerStateCommandHandler.Severity.USAGE);
         assertThat(invalidArity.lines()).containsExactly("Usage: /vbot respawn <id|selector>");
+        assertThat(invalidAfkProperty.lines().getFirst()).contains("sleep-ignored").contains("collision");
         assertThat(backend.applied).isEmpty();
         assertThat(backend.respawned).isEmpty();
     }
@@ -170,12 +320,17 @@ class PlayerStateCommandHandlerTest {
 
     private static final class RecordingBackend implements BackendControlService {
         private final List<ApplyCall> applied = new ArrayList<>();
+        private final List<String> probed = new ArrayList<>();
         private final List<String> respawned = new ArrayList<>();
+        private final List<String> recovered = new ArrayList<>();
         private String failureBot = "";
 
         @Override
         public CompletionStage<BackendControlResult> probe(String botId) {
-            return CompletableFuture.completedFuture(ok(botId));
+            probed.add(botId);
+            return CompletableFuture.completedFuture(new BackendControlResult(botId, BackendStatus.OK, "ready",
+                ActualState.presentExtended(true, BackendGameMode.SURVIVAL, RespawnPoint.clear(),
+                    true, false, false, false)));
         }
 
         @Override
@@ -191,6 +346,12 @@ class PlayerStateCommandHandlerTest {
         @Override
         public CompletionStage<BackendControlResult> respawn(String botId) {
             respawned.add(botId);
+            return CompletableFuture.completedFuture(ok(botId));
+        }
+
+        @Override
+        public CompletionStage<BackendControlResult> recover(String botId) {
+            recovered.add(botId);
             return CompletableFuture.completedFuture(ok(botId));
         }
     }

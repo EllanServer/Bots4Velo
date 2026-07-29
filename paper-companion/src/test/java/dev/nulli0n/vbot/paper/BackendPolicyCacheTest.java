@@ -3,6 +3,7 @@ package dev.nulli0n.vbot.paper;
 import dev.nulli0n.vbot.backend.protocol.BackendGameMode;
 import dev.nulli0n.vbot.backend.protocol.BackendInvulnerability;
 import dev.nulli0n.vbot.backend.protocol.BackendPolicy;
+import dev.nulli0n.vbot.backend.protocol.ManagedBoolean;
 import dev.nulli0n.vbot.backend.protocol.RespawnPoint;
 import org.junit.jupiter.api.Test;
 
@@ -40,5 +41,20 @@ class BackendPolicyCacheTest {
 
         assertFalse(cache.get(playerId).isPresent());
         assertEquals(0, cache.size());
+    }
+
+    @Test
+    void extendedBooleanPolicyIsCachedAndAllUnchangedStillClearsIt() {
+        BackendPolicyCache cache = new BackendPolicyCache();
+        UUID playerId = UUID.randomUUID();
+        BackendPolicy extended = new BackendPolicy(BackendInvulnerability.UNCHANGED,
+            BackendGameMode.UNCHANGED, RespawnPoint.unchanged(), ManagedBoolean.ENABLED,
+            ManagedBoolean.DISABLED, ManagedBoolean.ENABLED, ManagedBoolean.DISABLED);
+
+        cache.put(playerId, extended);
+
+        assertEquals(extended, cache.get(playerId).orElse(null));
+        cache.put(playerId, BackendPolicy.unchanged());
+        assertFalse(cache.get(playerId).isPresent());
     }
 }

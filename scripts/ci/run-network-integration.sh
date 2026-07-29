@@ -13,7 +13,7 @@ VELOCITY_PLUGIN_JAR="${VELOCITY_PLUGIN_JAR:-$PWD/build/libs/bots4velo-[0-9]*.jar
 PAPER_COMPANION_JAR="${PAPER_COMPANION_JAR:-$PWD/build/libs/bots4velo-paper-*.jar}"
 PAPER_JAVA="${PAPER_JAVA:-${JAVA_HOME:-}/bin/java}"
 VELOCITY_JAVA="${VELOCITY_JAVA:-$PAPER_JAVA}"
-USER_AGENT="bots4velo-integration/2.5.0 (https://github.com/EllanServer/Bots4Velo)"
+USER_AGENT="bots4velo-integration/2.6.0 (https://github.com/EllanServer/Bots4Velo)"
 BACKEND_SHARED_SECRET="${BACKEND_SHARED_SECRET:-Bots4Velo-CI-Backend-Control-Key-2026-0001}"
 PROXY_PORT="${PROXY_PORT:-25590}"
 LOBBY_PORT="${LOBBY_PORT:-25591}"
@@ -87,10 +87,19 @@ wait_for_new_log() {
 }
 
 download_fill_artifact() {
-  local project="$1" version="$2" destination="$3" response url
-  response="$(curl --fail --retry 5 --retry-all-errors --connect-timeout 20 --max-time 90 --silent --show-error \
-    -H "User-Agent: $USER_AGENT" \
-    "https://fill.papermc.io/v3/projects/$project/versions/$version/builds")"
+  local project="$1" version="$2" destination="$3" response="" url attempt
+  # Four matrix jobs can hit Fill at nearly the same time. A manual retry loop
+  # also covers HTTP 403 responses, which curl does not classify as transient.
+  for attempt in 1 2 3 4 5 6; do
+    if response="$(curl --fail --connect-timeout 20 --max-time 90 --silent --show-error \
+      -H "User-Agent: $USER_AGENT" \
+      "https://fill.papermc.io/v3/projects/$project/versions/$version/builds")" && [[ -n "$response" ]]; then
+      break
+    fi
+    response=""
+    sleep $((attempt * 3))
+  done
+  [[ -n "$response" ]] || die "Could not download $project $version build metadata after 6 attempts"
   url="$(python3 -c '
 import json
 import sys
@@ -255,6 +264,7 @@ bots:
     server-switch-delay-ms: 500
     server-switch-maximum-attempts: 6
     player-state:
+      afk-preset: "FARM"
       invulnerable: "ENABLED"
       game-mode: "SURVIVAL"
       # Gives the shell enough time to start observing the recovered AFK
@@ -356,7 +366,7 @@ wait_for_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
 wait_for_log "$VELOCITY_LOG" \
-  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' 90
+  'Paper backend control APPLY_POLICY_EXT for bot IntegrationBot on afk: OK' 90
 if [[ "$MINECRAFT_VERSION" != "1.16.5" ]]; then
   wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
 fi
@@ -372,7 +382,7 @@ wait_for_log "$WORK_ROOT/afk/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
 wait_for_new_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" "$velocity_log_lines" 90
 wait_for_new_log "$VELOCITY_LOG" \
-  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' "$policy_replay_log_lines" 90
+  'Paper backend control APPLY_POLICY_EXT for bot IntegrationBot on afk: OK' "$policy_replay_log_lines" 90
 
 log "Fault test: restart Velocity; enabled bot must return to PLAY"
 restart_velocity
@@ -380,6 +390,6 @@ wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" 90
 wait_for_log "$VELOCITY_LOG" \
-  'Paper backend control APPLY_POLICY for bot IntegrationBot on afk: OK' 90
+  'Paper backend control APPLY_POLICY_EXT for bot IntegrationBot on afk: OK' 90
 
 log "Integration passed: Minecraft $MINECRAFT_VERSION / protocol $PROTOCOL_ID"

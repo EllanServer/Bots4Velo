@@ -241,12 +241,33 @@ public record BotPluginConfig(
         InvulnerabilityMode invulnerability,
         ManagedGameMode gameMode,
         long applyDelayMillis,
-        RespawnPointConfig respawnPoint
+        RespawnPointConfig respawnPoint,
+        AfkPreset afkPreset,
+        ManagedFlag sleepingIgnored,
+        ManagedFlag affectsSpawning,
+        ManagedFlag pickupItems,
+        ManagedFlag collidable
     ) {
         public PlayerStateConfig {
             invulnerability = invulnerability == null ? InvulnerabilityMode.KEEP : invulnerability;
             gameMode = gameMode == null ? ManagedGameMode.KEEP : gameMode;
             respawnPoint = respawnPoint == null ? RespawnPointConfig.unchanged() : respawnPoint;
+            afkPreset = afkPreset == null ? AfkPreset.NONE : afkPreset;
+            sleepingIgnored = sleepingIgnored == null ? ManagedFlag.KEEP : sleepingIgnored;
+            affectsSpawning = affectsSpawning == null ? ManagedFlag.KEEP : affectsSpawning;
+            pickupItems = pickupItems == null ? ManagedFlag.KEEP : pickupItems;
+            collidable = collidable == null ? ManagedFlag.KEEP : collidable;
+        }
+
+        /** Source-compatible constructor for the original player-state model. */
+        public PlayerStateConfig(
+            InvulnerabilityMode invulnerability,
+            ManagedGameMode gameMode,
+            long applyDelayMillis,
+            RespawnPointConfig respawnPoint
+        ) {
+            this(invulnerability, gameMode, applyDelayMillis, respawnPoint, AfkPreset.NONE,
+                ManagedFlag.KEEP, ManagedFlag.KEEP, ManagedFlag.KEEP, ManagedFlag.KEEP);
         }
 
         public static PlayerStateConfig unchanged() {
@@ -274,6 +295,19 @@ public record BotPluginConfig(
     }
 
     public enum InvulnerabilityMode {
+        KEEP,
+        ENABLED,
+        DISABLED
+    }
+
+    public enum AfkPreset {
+        NONE,
+        SAFE,
+        FARM,
+        NORMAL
+    }
+
+    public enum ManagedFlag {
         KEEP,
         ENABLED,
         DISABLED

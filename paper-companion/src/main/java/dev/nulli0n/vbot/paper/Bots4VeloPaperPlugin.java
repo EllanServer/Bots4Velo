@@ -2,6 +2,7 @@ package dev.nulli0n.vbot.paper;
 
 import dev.nulli0n.vbot.backend.protocol.ActualState;
 import dev.nulli0n.vbot.backend.protocol.BackendChannel;
+import dev.nulli0n.vbot.backend.protocol.BackendCapabilities;
 import dev.nulli0n.vbot.backend.protocol.BackendInvulnerability;
 import dev.nulli0n.vbot.backend.protocol.BackendOperation;
 import dev.nulli0n.vbot.backend.protocol.BackendPolicy;
@@ -25,12 +26,18 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMessageListener, Listener {
     private static final long REJECT_LOG_INTERVAL_MILLIS = 10_000L;
 
     private final BackendPolicyCache policies = new BackendPolicyCache();
     private final PaperPolicyService policyService = new PaperPolicyService();
+    private final Set<UUID> recoveries = Collections.newSetFromMap(
+        new ConcurrentHashMap<UUID, Boolean>());
     private byte[] secret;
     private ReplayWindow replayWindow;
     private SignedResponseCache signedResponses;
@@ -144,13 +151,18 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
 
         switch (request.operation()) {
             case PROBE:
+            case PROBE_EXT:
                 probe(carrier, request);
                 break;
             case APPLY_POLICY:
+            case APPLY_POLICY_EXT:
                 apply(carrier, request);
                 break;
             case RESPAWN:
                 respawn(carrier, request);
+                break;
+            case RECOVER:
+                recover(carrier, request);
                 break;
             default:
                 respondProcessed(carrier, request, BackendStatus.UNSUPPORTED,
@@ -162,7 +174,9 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
     private void probe(Player carrier, ControlRequest request) {
         try {
             respondProcessed(carrier, request, BackendStatus.OK,
-                "Bots4VeloPaper protocol " + ProtocolCodec.VERSION, policyService.actualState(carrier));
+                "Bots4VeloPaper protocol " + ProtocolCodec.VERSION + "; "
+                    + BackendCapabilities.ADVERTISEMENT + "; collidable=best-effort",
+                policyService.actualState(carrier));
         }
         catch (PolicyApplyException exception) {
             respondProcessed(carrier, request, exception.status(), exception.getMessage(), ActualState.absent());
@@ -173,7 +187,10 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
         try {
             BackendPolicy effective = policyService.apply(carrier, request.policy());
             policies.put(carrier.getUniqueId(), effective);
-            respondProcessed(carrier, request, BackendStatus.OK, "Policy applied", policyService.actualState(carrier));
+            respondProcessed(carrier, request, BackendStatus.OK,
+                request.operation() == BackendOperation.APPLY_POLICY_EXT
+                    ? "Extended policy applied; collidable is best-effort" : "Policy applied",
+                policyService.actualState(carrier));
         }
         catch (PolicyApplyException | RuntimeException exception) {
             BackendStatus status = exception instanceof PolicyApplyException
@@ -206,6 +223,63 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
         }, 1L);
     }
 
+    private void recover(Player carrier, ControlRequest request) {
+        if (!carrier.isDead()) {
+            completeRecovery(carrier, request);
+            return;
+        }
+        UUID playerId = carrier.getUniqueId();
+        if (!recoveries.add(playerId)) {
+            respondProcessed(carrier, request, BackendStatus.APPLY_FAILED,
+                "Recovery is already in progress", safeActualState(carrier));
+            return;
+        }
+        try {
+            carrier.spigot().respawn();
+        }
+        catch (RuntimeException exception) {
+            recoveries.remove(playerId);
+            respondProcessed(carrier, request, BackendStatus.APPLY_FAILED,
+                safeMessage(exception), safeActualState(carrier));
+            return;
+        }
+        getServer().getScheduler().runTaskLater(this, () -> {
+            try {
+                if (!carrier.isOnline()) {
+                    respondProcessed(carrier, request, BackendStatus.BOT_NOT_ON_SERVER,
+                        "Player disconnected during recovery", ActualState.absent());
+                    return;
+                }
+                completeRecovery(carrier, request);
+            }
+            finally {
+                recoveries.remove(playerId);
+            }
+        }, 1L);
+    }
+
+    private void completeRecovery(Player carrier, ControlRequest request) {
+        if (carrier.isDead()) {
+            respondProcessed(carrier, request, BackendStatus.APPLY_FAILED,
+                "Player is still dead after the respawn attempt", safeActualState(carrier));
+            return;
+        }
+        try {
+            policyService.recover(carrier);
+            BackendStatus replayStatus = replayCachedPolicy(carrier);
+            respondProcessed(carrier, request, replayStatus,
+                replayStatus == BackendStatus.OK
+                    ? "Recovery completed and cached policy replayed"
+                    : "Recovery completed but cached policy replay failed",
+                safeActualState(carrier));
+        }
+        catch (PolicyApplyException | RuntimeException exception) {
+            BackendStatus status = exception instanceof PolicyApplyException
+                ? ((PolicyApplyException) exception).status() : BackendStatus.APPLY_FAILED;
+            respondProcessed(carrier, request, status, safeMessage(exception), safeActualState(carrier));
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
         scheduleReplay(event.getPlayer());
@@ -213,7 +287,9 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onRespawn(PlayerRespawnEvent event) {
-        scheduleReplay(event.getPlayer());
+        if (!recoveries.contains(event.getPlayer().getUniqueId())) {
+            scheduleReplay(event.getPlayer());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -224,6 +300,7 @@ public final class Bots4VeloPaperPlugin extends JavaPlugin implements PluginMess
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         policies.remove(event.getPlayer().getUniqueId());
+        recoveries.remove(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)

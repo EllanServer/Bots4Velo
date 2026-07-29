@@ -26,10 +26,12 @@ public final class ControlRequest {
             throw new IllegalArgumentException("nonce must contain exactly " + NONCE_BYTES + " bytes");
         }
         this.operation = Objects.requireNonNull(operation, "operation");
-        if (operation == BackendOperation.APPLY_POLICY && policy == null) {
-            throw new IllegalArgumentException("APPLY_POLICY requires a policy");
+        boolean policyOperation = operation == BackendOperation.APPLY_POLICY
+            || operation == BackendOperation.APPLY_POLICY_EXT;
+        if (policyOperation && policy == null) {
+            throw new IllegalArgumentException(operation + " requires a policy");
         }
-        if (operation != BackendOperation.APPLY_POLICY && policy != null) {
+        if (!policyOperation && policy != null) {
             throw new IllegalArgumentException(operation + " does not accept a policy");
         }
         this.policy = policy;

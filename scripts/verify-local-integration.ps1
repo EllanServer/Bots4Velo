@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$NetworkRoot = (Join-Path $PSScriptRoot "..\test-network\afk-26.2"),
-    [string]$ExpectedPluginVersion = "2.5.0",
+    [string]$ExpectedPluginVersion = "2.6.0",
     [switch]$RequireBotsInPlay
 )
 

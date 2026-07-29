@@ -23,7 +23,9 @@ class VBotCommandTest {
             .anyMatch(line -> line.contains("invulnerable"))
             .anyMatch(line -> line.contains("gamemode"))
             .anyMatch(line -> line.contains("spawnpoint"))
-            .anyMatch(line -> line.contains("respawn"));
+            .anyMatch(line -> line.contains("respawn"))
+            .anyMatch(line -> line.contains("afk"))
+            .anyMatch(line -> line.contains("recover"));
         assertThat(VBotCommand.helpLines(4)).isEmpty();
     }
 
@@ -33,6 +35,25 @@ class VBotCommandTest {
         assertThat(VBotCommand.permissionFor("gamemode")).isEqualTo("bots4velo.control");
         assertThat(VBotCommand.permissionFor("spawnpoint")).isEqualTo("bots4velo.control");
         assertThat(VBotCommand.permissionFor("respawn")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("afk")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("recover")).isEqualTo("bots4velo.control");
+        assertThat(VBotCommand.permissionFor("afk", new String[]{"afk", "all", "status"}))
+            .isEqualTo("bots4velo.view");
+        assertThat(VBotCommand.permissionFor("afk", new String[]{"afk", "all", "preset", "safe"}))
+            .isEqualTo("bots4velo.control");
+    }
+
+    @Test
+    void afkSuggestionsSeparateViewAndControlActions() {
+        assertThat(VBotCommand.afkActionSuggestions("", true, false))
+            .containsExactly("status");
+        assertThat(VBotCommand.afkActionSuggestions("", false, true))
+            .containsExactly("preset", "set", "unmanage");
+        assertThat(VBotCommand.afkActionSuggestions("", true, true))
+            .containsExactly("status", "preset", "set", "unmanage");
+        assertThat(VBotCommand.afkActionSuggestions("p", true, true))
+            .containsExactly("preset");
+        assertThat(VBotCommand.afkActionSuggestions("", false, false)).isEmpty();
     }
 
     private static boolean isAscii(String value) {

@@ -6,6 +6,7 @@ import dev.nulli0n.vbot.backend.BackendControlService;
 import dev.nulli0n.vbot.backend.InvulnerabilityChange;
 import dev.nulli0n.vbot.backend.protocol.BackendGameMode;
 import dev.nulli0n.vbot.backend.protocol.BackendStatus;
+import dev.nulli0n.vbot.backend.protocol.ManagedBoolean;
 import dev.nulli0n.vbot.backend.protocol.RespawnPoint;
 
 import java.util.ArrayList;
@@ -51,15 +52,18 @@ final class PlayerStateCommandHandler {
             .map(botId -> invoke(botId, operation)).toList();
         CompletableFuture<Void> completed = CompletableFuture.allOf(
             acknowledgements.toArray(CompletableFuture[]::new));
-        return completed.thenApply(ignored -> summarize(operation.label(), acknowledgements));
+        return completed.thenApply(ignored -> summarize(operation, acknowledgements));
     }
 
     private CompletableFuture<BackendControlResult> invoke(String botId, ParsedOperation operation) {
         CompletionStage<BackendControlResult> stage;
         try {
-            stage = operation.respawn()
-                ? backend.respawn(botId)
-                : backend.apply(botId, operation.patch());
+            stage = switch (operation.kind()) {
+                case APPLY -> backend.apply(botId, operation.patch());
+                case PROBE -> backend.probe(botId);
+                case RESPAWN -> backend.respawn(botId);
+                case RECOVER -> backend.recover(botId);
+            };
         }
         catch (Exception exception) {
             return CompletableFuture.completedFuture(failed(botId, exception));
@@ -84,23 +88,30 @@ final class PlayerStateCommandHandler {
         }).toCompletableFuture();
     }
 
-    private static Reply summarize(String label,
+    private static Reply summarize(ParsedOperation operation,
                                    List<CompletableFuture<BackendControlResult>> acknowledgements) {
         List<BackendControlResult> results = acknowledgements.stream().map(CompletableFuture::join).toList();
         long succeeded = results.stream().filter(BackendControlResult::successful).count();
         Severity severity = succeeded == results.size()
             ? Severity.SUCCESS : (succeeded == 0 ? Severity.ERROR : Severity.WARNING);
         List<String> lines = new ArrayList<>();
-        lines.add(label + " acknowledged by " + succeeded + "/" + results.size() + " bot(s).");
-        if (results.size() == 1 && results.getFirst().successful()
-            && results.getFirst().actualState().present()) {
-            var actual = results.getFirst().actualState();
-            String spawn = actual.respawnPoint().mode().name();
-            if (!actual.respawnPoint().world().isBlank()) {
-                spawn += "@" + actual.respawnPoint().world();
+        lines.add(operation.label() + " acknowledged by " + succeeded + "/" + results.size() + " bot(s).");
+        if (operation.kind() == OperationKind.PROBE) {
+            List<BackendControlResult> statusResults = results.stream()
+                .filter(BackendControlResult::successful)
+                .filter(result -> result.actualState().present())
+                .toList();
+            statusResults.stream()
+                .limit(MAXIMUM_FAILURE_LINES)
+                .forEach(result -> lines.add(actualStateLine(result.botId(), result.actualState(), true)));
+            if (statusResults.size() > MAXIMUM_FAILURE_LINES) {
+                lines.add("... and " + (statusResults.size() - MAXIMUM_FAILURE_LINES)
+                    + " more status result(s).");
             }
-            lines.add("Actual state: invulnerable=" + actual.invulnerable()
-                + ", gamemode=" + actual.gameMode() + ", spawnpoint=" + spawn + ".");
+        }
+        if (results.size() == 1 && results.getFirst().successful()
+            && results.getFirst().actualState().present() && operation.kind() != OperationKind.PROBE) {
+            lines.add(actualStateLine("", results.getFirst().actualState(), false));
         }
         List<BackendControlResult> failures = results.stream()
             .filter(result -> !result.successful()).toList();
@@ -129,6 +140,8 @@ final class PlayerStateCommandHandler {
             case "gamemode" -> parseGameMode(args);
             case "spawnpoint" -> parseSpawnPoint(args);
             case "respawn" -> parseRespawn(args);
+            case "afk" -> parseAfk(args);
+            case "recover" -> parseRecover(args);
             default -> throw new IllegalArgumentException("Unsupported player-state action: " + action);
         };
     }
@@ -206,6 +219,73 @@ final class PlayerStateCommandHandler {
         return ParsedOperation.respawn(args[1]);
     }
 
+    private static ParsedOperation parseRecover(String[] args) {
+        if (args.length != 2) {
+            throw usage("Usage: /vbot recover <id|selector>");
+        }
+        return ParsedOperation.recover(args[1]);
+    }
+
+    private static ParsedOperation parseAfk(String[] args) {
+        if (args.length < 3) {
+            throw usage(afkUsage());
+        }
+        String selector = args[1];
+        return switch (args[2].toLowerCase(Locale.ROOT)) {
+            case "status" -> {
+                requireLength(args, 3, afkUsage());
+                yield ParsedOperation.probe(selector, "AFK status");
+            }
+            case "unmanage" -> {
+                requireLength(args, 3, afkUsage());
+                yield ParsedOperation.apply(selector, "AFK policy removal", BackendControlPatch.afkPreset(
+                    InvulnerabilityChange.KEEP, ManagedBoolean.UNCHANGED, ManagedBoolean.UNCHANGED,
+                    ManagedBoolean.UNCHANGED, ManagedBoolean.UNCHANGED));
+            }
+            case "preset" -> parseAfkPreset(args);
+            case "set" -> parseAfkFlag(args);
+            default -> throw input("AFK action must be status, preset, set or unmanage.");
+        };
+    }
+
+    private static ParsedOperation parseAfkPreset(String[] args) {
+        requireLength(args, 4, afkUsage());
+        return switch (args[3].toLowerCase(Locale.ROOT)) {
+            case "safe" -> ParsedOperation.apply(args[1], "SAFE AFK preset", BackendControlPatch.afkPreset(
+                InvulnerabilityChange.ENABLED, ManagedBoolean.ENABLED, ManagedBoolean.UNCHANGED,
+                ManagedBoolean.DISABLED, ManagedBoolean.DISABLED));
+            case "farm" -> ParsedOperation.apply(args[1], "FARM AFK preset", BackendControlPatch.afkPreset(
+                InvulnerabilityChange.ENABLED, ManagedBoolean.ENABLED, ManagedBoolean.ENABLED,
+                ManagedBoolean.DISABLED, ManagedBoolean.DISABLED));
+            case "normal" -> ParsedOperation.apply(args[1], "NORMAL AFK preset", BackendControlPatch.afkPreset(
+                InvulnerabilityChange.DISABLED, ManagedBoolean.DISABLED, ManagedBoolean.ENABLED,
+                ManagedBoolean.ENABLED, ManagedBoolean.ENABLED));
+            default -> throw input("AFK preset must be safe, farm or normal.");
+        };
+    }
+
+    private static ParsedOperation parseAfkFlag(String[] args) {
+        requireLength(args, 5, afkUsage());
+        ManagedBoolean value = managedBoolean(args[4]);
+        BackendControlPatch patch = switch (args[3].toLowerCase(Locale.ROOT)) {
+            case "sleep-ignored" -> BackendControlPatch.sleepingIgnored(value);
+            case "affects-spawning" -> BackendControlPatch.affectsSpawning(value);
+            case "pickup" -> BackendControlPatch.pickupItems(value);
+            case "collision" -> BackendControlPatch.collidable(value);
+            default -> throw input("AFK property must be sleep-ignored, affects-spawning, pickup or collision.");
+        };
+        return ParsedOperation.apply(args[1], "AFK property update", patch);
+    }
+
+    private static ManagedBoolean managedBoolean(String raw) {
+        return switch (raw.toLowerCase(Locale.ROOT)) {
+            case "on" -> ManagedBoolean.ENABLED;
+            case "off" -> ManagedBoolean.DISABLED;
+            case "keep" -> ManagedBoolean.UNCHANGED;
+            default -> throw input("AFK property value must be on, off or keep.");
+        };
+    }
+
     private static void requireLength(String[] args, int expected, String usage) {
         if (args.length != expected) {
             throw usage(usage);
@@ -215,6 +295,33 @@ final class PlayerStateCommandHandler {
     private static String spawnPointUsage() {
         return "Usage: /vbot spawnpoint <id|selector> "
             + "<current|worldspawn|clear|set <world> <x> <y> <z> [yaw]>";
+    }
+
+    private static String afkUsage() {
+        return "Usage: /vbot afk <id|selector> <status|preset <safe|farm|normal>|"
+            + "set <sleep-ignored|affects-spawning|pickup|collision> <on|off|keep>|unmanage>";
+    }
+
+    private static String actualStateLine(String botId, dev.nulli0n.vbot.backend.protocol.ActualState actual,
+                                          boolean includeBot) {
+        String spawn = actual.respawnPoint().mode().name();
+        if (!actual.respawnPoint().world().isBlank()) {
+            spawn += "@" + actual.respawnPoint().world();
+        }
+        StringBuilder line = new StringBuilder(includeBot ? botId + ": " : "Actual state: ")
+            .append("invulnerable=").append(actual.invulnerable())
+            .append(", gamemode=").append(actual.gameMode())
+            .append(", spawnpoint=").append(spawn);
+        if (actual.extendedPresent()) {
+            line.append(", sleepIgnored=").append(actual.sleepingIgnored())
+                .append(", affectsSpawning=").append(actual.affectsSpawning())
+                .append(", pickup=").append(actual.pickupItems())
+                .append(", collidable=").append(actual.collidable());
+        }
+        else if (includeBot) {
+            line.append(", extendedAfk=unavailable");
+        }
+        return line.append('.').toString();
     }
 
     private static String world(String raw) {
@@ -296,15 +403,30 @@ final class PlayerStateCommandHandler {
         String selector,
         String label,
         BackendControlPatch patch,
-        boolean respawn
+        OperationKind kind
     ) {
         static ParsedOperation apply(String selector, String label, BackendControlPatch patch) {
-            return new ParsedOperation(selector, label, patch, false);
+            return new ParsedOperation(selector, label, patch, OperationKind.APPLY);
+        }
+
+        static ParsedOperation probe(String selector, String label) {
+            return new ParsedOperation(selector, label, null, OperationKind.PROBE);
         }
 
         static ParsedOperation respawn(String selector) {
-            return new ParsedOperation(selector, "Respawn request", null, true);
+            return new ParsedOperation(selector, "Respawn request", null, OperationKind.RESPAWN);
         }
+
+        static ParsedOperation recover(String selector) {
+            return new ParsedOperation(selector, "Recovery request", null, OperationKind.RECOVER);
+        }
+    }
+
+    private enum OperationKind {
+        APPLY,
+        PROBE,
+        RESPAWN,
+        RECOVER
     }
 
     private static final class CommandInputException extends IllegalArgumentException {

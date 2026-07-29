@@ -5,6 +5,7 @@ import dev.nulli0n.vbot.backend.protocol.BackendGameMode;
 import dev.nulli0n.vbot.backend.protocol.BackendInvulnerability;
 import dev.nulli0n.vbot.backend.protocol.BackendPolicy;
 import dev.nulli0n.vbot.backend.protocol.BackendStatus;
+import dev.nulli0n.vbot.backend.protocol.ManagedBoolean;
 import dev.nulli0n.vbot.backend.protocol.RespawnPoint;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
@@ -17,6 +18,9 @@ import java.lang.reflect.Method;
 
 final class PaperPolicyService {
     private static final double WORLD_LIMIT = 29_999_984.0D;
+    private static final double MAXIMUM_RECOVERY_HEALTH = 1024.0D;
+    private static final int RECOVERY_FOOD = 20;
+    private static final float RECOVERY_SATURATION = 20.0F;
 
     BackendPolicy apply(Player player, BackendPolicy requested) throws PolicyApplyException {
         ResolvedRespawn resolved = resolveRespawn(player, requested.respawnPoint());
@@ -31,6 +35,7 @@ final class PaperPolicyService {
         if (gameMode != null) {
             player.setGameMode(gameMode);
         }
+        applyManagedBooleans(player, requested);
         if (resolved.apply) {
             RespawnCompatibility.set(player, resolved.location);
         }
@@ -54,7 +59,54 @@ final class PaperPolicyService {
         catch (IllegalArgumentException exception) {
             gameMode = BackendGameMode.UNCHANGED;
         }
-        return ActualState.present(player.isInvulnerable(), gameMode, point);
+        return ActualState.presentExtended(player.isInvulnerable(), gameMode, point,
+            player.isSleepingIgnored(), player.getAffectsSpawning(), player.getCanPickupItems(),
+            player.isCollidable());
+    }
+
+    void recover(Player player) throws PolicyApplyException {
+        double maximumHealth = player.getMaxHealth();
+        if (!finite(maximumHealth) || maximumHealth <= 0.0D
+            || maximumHealth > MAXIMUM_RECOVERY_HEALTH) {
+            throw new PolicyApplyException(BackendStatus.APPLY_FAILED,
+                "Paper reported an invalid maximum health for recovery");
+        }
+        try {
+            player.setHealth(maximumHealth);
+            player.setFoodLevel(RECOVERY_FOOD);
+            player.setSaturation(RECOVERY_SATURATION);
+            player.setFireTicks(0);
+            player.setFallDistance(0.0F);
+        }
+        catch (RuntimeException exception) {
+            throw new PolicyApplyException(BackendStatus.APPLY_FAILED,
+                "Paper rejected the recovery values", exception);
+        }
+        if (!finite(player.getHealth()) || Double.compare(player.getHealth(), maximumHealth) != 0
+            || player.getFoodLevel() != RECOVERY_FOOD || !finite(player.getSaturation())
+            || Float.compare(player.getSaturation(), RECOVERY_SATURATION) != 0
+            || player.getFireTicks() != 0 || !finite(player.getFallDistance())
+            || Float.compare(player.getFallDistance(), 0.0F) != 0) {
+            throw new PolicyApplyException(BackendStatus.APPLY_FAILED,
+                "Another plugin rejected one or more recovery values");
+        }
+    }
+
+    private void applyManagedBooleans(Player player, BackendPolicy requested) {
+        if (requested.sleepingIgnored() != ManagedBoolean.UNCHANGED) {
+            player.setSleepingIgnored(requested.sleepingIgnored() == ManagedBoolean.ENABLED);
+        }
+        if (requested.affectsSpawning() != ManagedBoolean.UNCHANGED) {
+            player.setAffectsSpawning(requested.affectsSpawning() == ManagedBoolean.ENABLED);
+        }
+        if (requested.pickupItems() != ManagedBoolean.UNCHANGED) {
+            player.setCanPickupItems(requested.pickupItems() == ManagedBoolean.ENABLED);
+        }
+        if (requested.collidable() != ManagedBoolean.UNCHANGED) {
+            // Bukkit's flag is authoritative server-side; client-side collision prediction
+            // and scoreboard-team plugins can still make player collision best-effort.
+            player.setCollidable(requested.collidable() == ManagedBoolean.ENABLED);
+        }
     }
 
     private ResolvedRespawn resolveRespawn(Player player, RespawnPoint requested) throws PolicyApplyException {
@@ -160,6 +212,19 @@ final class PaperPolicyService {
         if (resolved.apply && !sameRespawn(resolved.location, actual.respawnPoint())) {
             throw new PolicyApplyException(BackendStatus.APPLY_FAILED,
                 "Paper did not retain the requested respawn location");
+        }
+        verifyManagedBoolean("sleeping-ignored", requested.sleepingIgnored(), actual.sleepingIgnored());
+        verifyManagedBoolean("affects-spawning", requested.affectsSpawning(), actual.affectsSpawning());
+        verifyManagedBoolean("item-pickup", requested.pickupItems(), actual.pickupItems());
+        verifyManagedBoolean("collidable (best-effort)", requested.collidable(), actual.collidable());
+    }
+
+    private void verifyManagedBoolean(String name, ManagedBoolean requested, boolean actual)
+        throws PolicyApplyException {
+        if ((requested == ManagedBoolean.ENABLED && !actual)
+            || (requested == ManagedBoolean.DISABLED && actual)) {
+            throw new PolicyApplyException(BackendStatus.APPLY_FAILED,
+                "Another plugin rejected the " + name + " change");
         }
     }
 

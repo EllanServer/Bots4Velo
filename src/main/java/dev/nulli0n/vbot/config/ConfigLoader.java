@@ -2,6 +2,7 @@ package dev.nulli0n.vbot.config;
 
 import dev.nulli0n.vbot.backend.protocol.ProtocolSecrets;
 
+import dev.nulli0n.vbot.config.BotPluginConfig.AfkPreset;
 import dev.nulli0n.vbot.config.BotPluginConfig.AuthConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.AuthMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.BackendControlConfig;
@@ -10,6 +11,7 @@ import dev.nulli0n.vbot.config.BotPluginConfig.BehaviorMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.BehaviorPoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.BotDefinition;
 import dev.nulli0n.vbot.config.BotPluginConfig.InvulnerabilityMode;
+import dev.nulli0n.vbot.config.BotPluginConfig.ManagedFlag;
 import dev.nulli0n.vbot.config.BotPluginConfig.ManagedGameMode;
 import dev.nulli0n.vbot.config.BotPluginConfig.PlayerStateConfig;
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
@@ -400,18 +402,38 @@ public final class ConfigLoader {
     }
 
     private static PlayerStateConfig parsePlayerState(Map<String, Object> playerState, String id) {
-        InvulnerabilityMode invulnerability = enumValue(InvulnerabilityMode.class,
-            text(playerState, "invulnerable", "KEEP"), "bots." + id + ".player-state.invulnerable");
+        String path = "bots." + id + ".player-state";
+        AfkPreset afkPreset = enumOverride(AfkPreset.class, playerState, "afk-preset", AfkPreset.NONE,
+            path + ".afk-preset");
+        AfkPresetDefaults preset = switch (afkPreset) {
+            case NONE -> new AfkPresetDefaults(InvulnerabilityMode.KEEP, ManagedFlag.KEEP,
+                ManagedFlag.KEEP, ManagedFlag.KEEP, ManagedFlag.KEEP);
+            case SAFE -> new AfkPresetDefaults(InvulnerabilityMode.ENABLED, ManagedFlag.ENABLED,
+                ManagedFlag.KEEP, ManagedFlag.DISABLED, ManagedFlag.DISABLED);
+            case FARM -> new AfkPresetDefaults(InvulnerabilityMode.ENABLED, ManagedFlag.ENABLED,
+                ManagedFlag.ENABLED, ManagedFlag.DISABLED, ManagedFlag.DISABLED);
+            case NORMAL -> new AfkPresetDefaults(InvulnerabilityMode.DISABLED, ManagedFlag.DISABLED,
+                ManagedFlag.ENABLED, ManagedFlag.ENABLED, ManagedFlag.ENABLED);
+        };
+        InvulnerabilityMode invulnerability = enumOverride(InvulnerabilityMode.class, playerState,
+            "invulnerable", preset.invulnerability(), path + ".invulnerable");
+        ManagedFlag sleepingIgnored = enumOverride(ManagedFlag.class, playerState,
+            "sleep-ignored", preset.sleepingIgnored(), path + ".sleep-ignored");
+        ManagedFlag affectsSpawning = enumOverride(ManagedFlag.class, playerState,
+            "affects-spawning", preset.affectsSpawning(), path + ".affects-spawning");
+        ManagedFlag pickupItems = enumOverride(ManagedFlag.class, playerState,
+            "pickup-items", preset.pickupItems(), path + ".pickup-items");
+        ManagedFlag collidable = enumOverride(ManagedFlag.class, playerState,
+            "collidable", preset.collidable(), path + ".collidable");
         ManagedGameMode gameMode = enumValue(ManagedGameMode.class,
-            text(playerState, "game-mode", "KEEP"), "bots." + id + ".player-state.game-mode");
+            text(playerState, "game-mode", "KEEP"), path + ".game-mode");
         long applyDelayMillis = longValue(playerState, "apply-delay-ms", 0L, 0L, 60_000L);
         Map<String, Object> respawnPoint = section(playerState, "respawn-point");
         RespawnPointMode mode = enumValue(RespawnPointMode.class,
-            text(respawnPoint, "mode", "UNCHANGED"), "bots." + id + ".player-state.respawn-point.mode");
+            text(respawnPoint, "mode", "UNCHANGED"), path + ".respawn-point.mode");
         String world = text(respawnPoint, "world", "");
         if (mode == RespawnPointMode.FIXED && world.isBlank()) {
-            throw new IllegalArgumentException("bots." + id
-                + ".player-state.respawn-point.world is required for FIXED mode");
+            throw new IllegalArgumentException(path + ".respawn-point.world is required for FIXED mode");
         }
         RespawnPointConfig parsedRespawnPoint = new RespawnPointConfig(
             mode,
@@ -421,7 +443,17 @@ public final class ConfigLoader {
             doubleValue(respawnPoint, "z", 0.0D, -30_000_000D, 30_000_000D),
             (float) doubleValue(respawnPoint, "yaw", 0.0D, -360.0D, 360.0D)
         );
-        return new PlayerStateConfig(invulnerability, gameMode, applyDelayMillis, parsedRespawnPoint);
+        return new PlayerStateConfig(invulnerability, gameMode, applyDelayMillis, parsedRespawnPoint,
+            afkPreset, sleepingIgnored, affectsSpawning, pickupItems, collidable);
+    }
+
+    private record AfkPresetDefaults(
+        InvulnerabilityMode invulnerability,
+        ManagedFlag sleepingIgnored,
+        ManagedFlag affectsSpawning,
+        ManagedFlag pickupItems,
+        ManagedFlag collidable
+    ) {
     }
 
     private static List<BotPluginConfig.ScheduledAction> parseSchedules(Object value) {
@@ -663,5 +695,14 @@ public final class ConfigLoader {
         catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("Invalid value at " + path + ": " + raw, exception);
         }
+    }
+
+    private static <E extends Enum<E>> E enumOverride(Class<E> type, Map<String, Object> values,
+                                                       String key, E fallback, String path) {
+        if (!values.containsKey(key)) {
+            return fallback;
+        }
+        Object value = values.get(key);
+        return enumValue(type, value == null ? "" : String.valueOf(value).trim(), path);
     }
 }

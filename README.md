@@ -1,7 +1,7 @@
 # Bots4Velo
 
 一个由 Velocity 主插件和可选 Paper 后端伴侣组成的机器人系统。每个机器人都是嵌入代理进程的
-Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要修改无敌、游戏模式或重生点时，
+Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要修改无敌、游戏模式、挂机属性或重生点时，
 再由后端伴侣执行服务器权威操作。
 
 ## 支持版本
@@ -41,7 +41,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 - `/vbot status` 提供当前协议/状态以及本进程内累计 PLAY、非人工断线、资源包成功次数和时间戳，
   用于稳定性观察与故障审计。
 - 协议级绝对位置和视角控制，并可输出单个或全部机器人的 JSON 监控快照。
-- 通过带 HMAC 签名和防重放校验的 Paper 伴侣设置无敌、游戏模式与重生点，并支持手动重生。
+- 通过带 HMAC 签名和防重放校验的 Paper 伴侣设置无敌、游戏模式、挂机属性与重生点，并支持
+  手动重生和一键恢复生命/饥饿/着火状态。
 
 `ACCEPT_WITHOUT_DOWNLOAD` 只模拟客户端状态，不会下载或校验资源包。若 CraftEngine
 还使用自定义插件消息或服务端回调校验，必须在真实测试网络中捕获断线原因并补充对应处理。
@@ -60,8 +61,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 
 默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-- `bots4velo-2.5.0.jar`：安装到 Velocity 的 `plugins` 目录；
-- `bots4velo-paper-2.5.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+- `bots4velo-2.6.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-2.6.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
 
 也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
@@ -88,7 +89,7 @@ git push origin v2.0.0
 `bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
 测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
 
-`v2.5.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
+`v2.6.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
 同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
 
 ## 集成验证
@@ -143,6 +144,11 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot reconnect <id|selector>
 /vbot command <id|selector> <command...>
 /vbot behavior <id|selector> <start|pause|status>
+/vbot afk <id|selector> status
+/vbot afk <id|selector> preset <safe|farm|normal>
+/vbot afk <id|selector> set <sleep-ignored|affects-spawning|pickup|collision> <on|off|keep>
+/vbot afk <id|selector> unmanage
+/vbot recover <id|selector>
 /vbot invulnerable <id|selector> <on|off|keep>
 /vbot gamemode <id|selector> <survival|creative|adventure|spectator|unchanged>
 /vbot spawnpoint <id|selector> <current|worldspawn|clear>
@@ -171,7 +177,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 `bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
 `bots4velo.admin` 拥有全部权限。
 
-### Paper 后端玩家状态控制
+### Paper 后端玩家状态与挂机控制
 
 无敌、游戏模式和个人重生点均由 Paper 服务端决定，客户端数据包无法可靠修改这些属性。要使用相关
 命令，必须把 `bots4velo-paper-<version>.jar` 安装到每一个 Paper 后端，并让 Velocity 与所有伴侣使用
@@ -206,7 +212,13 @@ Velocity 和全部 Paper 后端，并保持主机时间同步，否则签名 ACK
 bots:
   Farm01:
     player-state:
-      invulnerable: ENABLED # KEEP / ENABLED / DISABLED
+      afk-preset: FARM # NONE / SAFE / FARM / NORMAL
+      # 可选覆盖；只取消需要单独调整的字段注释
+      # invulnerable: ENABLED # KEEP / ENABLED / DISABLED
+      # sleep-ignored: ENABLED # KEEP / ENABLED / DISABLED
+      # affects-spawning: ENABLED
+      # pickup-items: DISABLED
+      # collidable: DISABLED
       game-mode: SURVIVAL # KEEP / SURVIVAL / CREATIVE / ADVENTURE / SPECTATOR
       apply-delay-ms: 1000
       respawn-point:
@@ -223,14 +235,28 @@ bots:
 同一在线会话的换世界和死亡重生后重放已缓存策略，并在退出时清除缓存。运行时命令接受所有现有批量选择器并使用
 `bots4velo.control` 权限：
 
+- `afk ... preset safe` 忽略睡眠、开启无敌并关闭拾取和碰撞；`farm` 另外让机器人参与生物生成计算；
+  `normal` 恢复普通玩家语义。单项 `set` 可覆盖睡眠、生成、拾取或碰撞；`unmanage` 停止管理这五项，
+  但保留它们当时的服务端值，需要恢复普通值时应先使用 `preset normal`；
+- `afk ... status` 只读取真实后端状态，使用 `bots4velo.view` 权限，不会重新应用配置；
+- `recover` 在需要时先重生，再恢复生命、饥饿、饱和度并清除着火和摔落距离，最后重放该机器人
+  已缓存的玩家策略；重复执行是安全的；
 - `invulnerable on|off|keep` 设置真实服务端 invulnerable 标记；启用时伴侣还会取消该机器人的伤害事件；
 - `gamemode` 设置四种原版游戏模式，`unchanged` 保留当前值；
 - `spawnpoint current|worldspawn|clear|set ...` 修改个人重生点；
 - `respawn` 让已经死亡的机器人立即重生；机器人尚存活时返回成功但不会改变状态。
 
-所有新配置默认是安全 no-op：后端控制默认关闭，`invulnerable`/`game-mode` 为 `KEEP`，重生点为
-`UNCHANGED`。开启控制但漏装伴侣、密钥不一致或 ACK 超时时，命令会明确返回失败，不会把“消息已发送”
-误报为成功。
+运行时修改会在当前 Velocity 进程内保留，并在切服或自动重连后重新应用；执行 `/vbot reload` 后以
+配置文件为新的基线，不会把临时命令修改写回 YAML。
+
+`SAFE` 不会改变机器人是否参与生物生成；需要农场刷怪时使用 `FARM`。碰撞是 Paper 的服务端属性，
+客户端预测、计分板队伍或 TAB 的队伍设置仍可能覆盖最终表现，因此应在实际网络中验证。
+
+所有新配置默认是安全 no-op：后端控制默认关闭，`afk-preset` 为 `NONE`，挂机属性与
+`invulnerable`/`game-mode` 为 `KEEP`，重生点为 `UNCHANGED`。开启控制但漏装伴侣、密钥不一致或 ACK
+超时时，命令会明确返回失败，不会把“消息已发送”误报为成功。2.6 的扩展操作会先在当前后端连接上进行
+能力协商；旧版伴侣仍能执行原有无敌、游戏模式、重生点和重生命令，但新挂机属性与 `recover` 会明确返回
+不支持，不会部分应用策略。
 
 安全边界是“仅控制承载该消息的机器人自身”，不是远程控制台：协议校验 HMAC、时间戳、一次性 nonce、
 请求与响应关联 ID、当前后端和机器人 UUID；完全相同的重试只回放原 ACK，不会重复执行操作，其余重放与

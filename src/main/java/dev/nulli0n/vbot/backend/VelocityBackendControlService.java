@@ -14,6 +14,7 @@ import dev.nulli0n.vbot.backend.protocol.BackendPolicy;
 import dev.nulli0n.vbot.backend.protocol.BackendStatus;
 import dev.nulli0n.vbot.backend.protocol.ControlRequest;
 import dev.nulli0n.vbot.backend.protocol.ControlResponse;
+import dev.nulli0n.vbot.backend.protocol.ManagedBoolean;
 import dev.nulli0n.vbot.backend.protocol.ProtocolCodec;
 import dev.nulli0n.vbot.backend.protocol.ProtocolException;
 import dev.nulli0n.vbot.backend.protocol.ProtocolSecrets;
@@ -25,7 +26,9 @@ import dev.nulli0n.vbot.config.BotPluginConfig;
 import org.slf4j.Logger;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,6 +48,10 @@ public final class VelocityBackendControlService implements BackendControlServic
         MinecraftChannelIdentifier.from(BackendChannel.ID);
     private static final long RESPONSE_CLOCK_SKEW_MILLIS = 60_000L;
     private static final int MAXIMUM_PENDING_REQUESTS = 2_048;
+    private static final String BACKEND_CHANGED_DETAIL =
+        "Backend changed; acknowledgement is ambiguous.";
+    private static final String BOT_REMOVED_DETAIL =
+        "Bot was removed before the backend acknowledgement arrived.";
 
     private final ProxyServer proxy;
     private final Object plugin;
@@ -58,6 +65,8 @@ public final class VelocityBackendControlService implements BackendControlServic
     private final ConcurrentMap<UUID, PendingRequest> pending = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, CompletableFuture<Void>> operationTails = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> reapplyGenerations = new ConcurrentHashMap<>();
+    private final BackendCapabilityCache capabilityCache =
+        new BackendCapabilityCache(MAXIMUM_PENDING_REQUESTS);
     private final AtomicLong generation = new AtomicLong();
     private final Object lifecycleLock = new Object();
     private final Object policyLock = new Object();
@@ -95,7 +104,14 @@ public final class VelocityBackendControlService implements BackendControlServic
 
     @Override
     public CompletionStage<BackendControlResult> probe(String botId) {
-        return send(botId, BackendOperation.PROBE, null);
+        Optional<BotSession> session = findSession(botId);
+        if (session.isEmpty()) {
+            capabilityCache.remove(normalize(botId));
+            return completedFailure(botId, BackendStatus.BAD_REQUEST, "Unknown bot.");
+        }
+        BotSession expectedSession = session.get();
+        String canonicalId = expectedSession.definition().id();
+        return enqueue(canonicalId, () -> probeSerialized(expectedSession));
     }
 
     @Override
@@ -105,37 +121,148 @@ public final class VelocityBackendControlService implements BackendControlServic
         }
         Optional<BotSession> session = findSession(botId);
         if (session.isEmpty()) {
+            capabilityCache.remove(normalize(botId));
             return completedFailure(botId, BackendStatus.BAD_REQUEST, "Unknown bot.");
         }
-        String canonicalId = session.get().definition().id();
-        return enqueue(canonicalId, () -> applySerialized(canonicalId, patch));
+        BotSession expectedSession = session.get();
+        String canonicalId = expectedSession.definition().id();
+        return enqueue(canonicalId, () -> applySerialized(expectedSession, patch));
     }
 
     @Override
     public CompletionStage<BackendControlResult> respawn(String botId) {
         Optional<BotSession> session = findSession(botId);
         if (session.isEmpty()) {
+            capabilityCache.remove(normalize(botId));
             return completedFailure(botId, BackendStatus.BAD_REQUEST, "Unknown bot.");
         }
-        String canonicalId = session.get().definition().id();
-        return enqueue(canonicalId, () -> send(canonicalId, BackendOperation.RESPAWN, null));
+        BotSession expectedSession = session.get();
+        String canonicalId = expectedSession.definition().id();
+        return enqueue(canonicalId, () -> send(expectedSession, BackendOperation.RESPAWN, null));
     }
 
-    private CompletionStage<BackendControlResult> applySerialized(String botId, BackendControlPatch patch) {
+    @Override
+    public CompletionStage<BackendControlResult> recover(String botId) {
         Optional<BotSession> session = findSession(botId);
         if (session.isEmpty()) {
+            capabilityCache.remove(normalize(botId));
             return completedFailure(botId, BackendStatus.BAD_REQUEST, "Unknown bot.");
         }
-        BackendPolicy previous = desiredPolicy(session.get());
+        BotSession expectedSession = session.get();
+        String canonicalId = expectedSession.definition().id();
+        return enqueue(canonicalId, () -> recoverSerialized(expectedSession));
+    }
+
+    private CompletionStage<BackendControlResult> applySerialized(
+        BotSession expectedSession,
+        BackendControlPatch patch
+    ) {
+        if (!isExpectedSession(expectedSession)) {
+            return staleSessionFailure(expectedSession);
+        }
+        String botId = expectedSession.definition().id();
+        BackendPolicy previous = desiredPolicy(expectedSession);
         BackendPolicy replacement = merge(previous, patch);
-        return send(botId, BackendOperation.APPLY_POLICY, replacement).thenApply(result -> {
+        return sendPolicy(expectedSession, replacement).thenApply(result -> {
             // A timeout is ambiguous: Paper may have applied the request and only
             // its ACK was lost. Retain the intent so a later switch/reconnect
             // converges both sides instead of silently restoring stale state.
-            if (result.successful() || result.status() == BackendStatus.TIMEOUT) {
-                setDesiredPolicy(session.get(), replacement);
+            if (retainsDesiredPolicy(result.status())) {
+                setDesiredPolicy(expectedSession, replacement);
             }
             return result;
+        });
+    }
+
+    private CompletionStage<BackendControlResult> probeSerialized(BotSession expectedSession) {
+        String botId = expectedSession.definition().id();
+        TargetResolution resolution = resolveTarget(expectedSession);
+        if (resolution.failure() != null) {
+            return CompletableFuture.completedFuture(resolution.failure());
+        }
+        ConnectedTarget target = resolution.target();
+        Optional<BackendCapabilityCache.Capabilities> cached = capabilityCache.get(
+            normalize(botId), target.connection());
+        if (cached.isPresent()) {
+            return sendExact(target, probeOperation(cached.get()), null);
+        }
+
+        return negotiate(target).thenCompose(negotiation -> {
+            if (negotiation.failure() != null) {
+                return CompletableFuture.completedFuture(negotiation.failure());
+            }
+            if (!negotiation.capabilities().probeExtended()) {
+                return CompletableFuture.completedFuture(negotiation.legacyProbe());
+            }
+            return sendExact(negotiation.target(), BackendOperation.PROBE_EXT, null);
+        });
+    }
+
+    private CompletionStage<BackendControlResult> sendPolicy(
+        BotSession expectedSession,
+        BackendPolicy policy
+    ) {
+        String botId = expectedSession.definition().id();
+        Optional<BackendOperation> legacyOperation = policyOperation(policy, null);
+        if (legacyOperation.isPresent()) {
+            return send(expectedSession, legacyOperation.get(), policy);
+        }
+        TargetResolution resolution = resolveTarget(expectedSession);
+        if (resolution.failure() != null) {
+            return CompletableFuture.completedFuture(resolution.failure());
+        }
+        return negotiate(resolution.target()).thenCompose(negotiation -> {
+            if (negotiation.failure() != null) {
+                return CompletableFuture.completedFuture(negotiation.failure());
+            }
+            Optional<BackendOperation> operation = policyOperation(policy, negotiation.capabilities());
+            if (operation.isEmpty()) {
+                return completedFailure(botId, BackendStatus.UNSUPPORTED,
+                    "The connected Paper companion does not support extended player-state policies.");
+            }
+            return sendExact(negotiation.target(), operation.get(), policy);
+        });
+    }
+
+    private CompletionStage<BackendControlResult> recoverSerialized(BotSession expectedSession) {
+        String botId = expectedSession.definition().id();
+        TargetResolution resolution = resolveTarget(expectedSession);
+        if (resolution.failure() != null) {
+            return CompletableFuture.completedFuture(resolution.failure());
+        }
+        return negotiate(resolution.target()).thenCompose(negotiation -> {
+            if (negotiation.failure() != null) {
+                return CompletableFuture.completedFuture(negotiation.failure());
+            }
+            if (!negotiation.capabilities().recover()) {
+                return completedFailure(botId, BackendStatus.UNSUPPORTED,
+                    "The connected Paper companion does not support recovery.");
+            }
+            return sendExact(negotiation.target(), BackendOperation.RECOVER, null);
+        });
+    }
+
+    private CompletionStage<CapabilityNegotiation> negotiate(ConnectedTarget target) {
+        String key = normalize(target.session().definition().id());
+        Optional<BackendCapabilityCache.Capabilities> cached = capabilityCache.get(key, target.connection());
+        if (cached.isPresent()) {
+            return CompletableFuture.completedFuture(CapabilityNegotiation.success(
+                target, cached.get(), null));
+        }
+        return sendExact(target, BackendOperation.PROBE, null).thenApply(result -> {
+            if (!result.successful()) {
+                return CapabilityNegotiation.failure(target, result);
+            }
+            if (!isCurrent(target)) {
+                capabilityCache.remove(key);
+                return CapabilityNegotiation.failure(target, BackendControlResult.failure(
+                    target.session().definition().id(), BackendStatus.BOT_NOT_ON_SERVER,
+                    "The bot changed backend while companion capabilities were being negotiated."));
+            }
+            BackendCapabilityCache.Capabilities capabilities =
+                BackendCapabilityCache.Capabilities.parse(result.detail());
+            capabilityCache.put(key, target.connection(), capabilities);
+            return CapabilityNegotiation.success(target, capabilities, result);
         });
     }
 
@@ -170,6 +297,7 @@ public final class VelocityBackendControlService implements BackendControlServic
         boolean matches = event.getSource() == request.connection()
             && event.getTarget() == request.player()
             && connection == request.connection()
+            && isExpectedSession(request.session())
             && request.player().getCurrentServer().orElse(null) == request.connection()
             && request.targetUuid().equals(carrierUuid)
             && request.targetUuid().equals(response.targetUuid())
@@ -189,8 +317,8 @@ public final class VelocityBackendControlService implements BackendControlServic
             response.detail(), response.actualState());
         logger.info("Paper backend control {} for bot {} on {}: {}",
             response.operation(), request.botId(), connection.getServerInfo().getName(), response.status());
-        findSession(request.botId()).ifPresent(session -> session.recordExternalEvent(
-            "BACKEND_CONTROL", response.operation() + ":" + response.status()));
+        request.session().recordExternalEvent(
+            "BACKEND_CONTROL", response.operation() + ":" + response.status());
         request.future().complete(result);
         return true;
     }
@@ -201,7 +329,13 @@ public final class VelocityBackendControlService implements BackendControlServic
             return;
         }
         findSessionByUsername(player.getUsername()).ifPresent(session -> {
+            if (proxy.getPlayer(session.definition().username()).orElse(null) != player) {
+                return;
+            }
             String key = normalize(session.definition().id());
+            ServerConnection currentConnection = player.getCurrentServer().orElse(null);
+            cancelPendingForBot(key, currentConnection, BackendStatus.TIMEOUT, BACKEND_CHANGED_DETAIL);
+            capabilityCache.remove(key);
             desiredPolicy(session);
             long currentGeneration = generation.incrementAndGet();
             reapplyGenerations.put(key, currentGeneration);
@@ -209,41 +343,48 @@ public final class VelocityBackendControlService implements BackendControlServic
             long authBudget = Math.max(30_000L, session.definition().auth().timeoutMillis() + 5_000L);
             long deadlineNanos = System.nanoTime()
                 + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(authBudget + delay);
-            scheduleReadyApply(session.definition().id(), currentGeneration, deadlineNanos, delay);
+            scheduleReadyApply(session, currentGeneration, deadlineNanos, delay);
         });
     }
 
-    private void scheduleReadyApply(String botId, long expectedGeneration, long deadlineNanos, long delayMillis) {
+    private void scheduleReadyApply(BotSession expectedSession, long expectedGeneration,
+                                    long deadlineNanos, long delayMillis) {
         proxy.getScheduler().buildTask(plugin,
-            () -> readyApply(botId, expectedGeneration, deadlineNanos))
+            () -> readyApply(expectedSession, expectedGeneration, deadlineNanos))
             .delay(Duration.ofMillis(Math.max(0L, delayMillis))).schedule();
     }
 
-    private void readyApply(String botId, long expectedGeneration, long deadlineNanos) {
-        if (closed || !reapplyGenerations.getOrDefault(normalize(botId), -1L).equals(expectedGeneration)) {
+    private void readyApply(BotSession expectedSession, long expectedGeneration, long deadlineNanos) {
+        String botId = expectedSession.definition().id();
+        String key = normalize(botId);
+        if (closed || !reapplyGenerations.getOrDefault(key, -1L).equals(expectedGeneration)) {
             return;
         }
-        Optional<BotSession> session = findSession(botId);
-        Optional<Player> player = session.flatMap(found -> proxy.getPlayer(found.definition().username()));
-        boolean ready = session.map(found -> found.isPlayable() && found.isAuthenticationComplete()).orElse(false)
+        if (!isExpectedSession(expectedSession)) {
+            reapplyGenerations.remove(key, expectedGeneration);
+            return;
+        }
+        Optional<Player> player = proxy.getPlayer(expectedSession.definition().username());
+        boolean ready = expectedSession.isPlayable() && expectedSession.isAuthenticationComplete()
             && player.flatMap(Player::getCurrentServer).isPresent();
         if (!ready) {
             if (System.nanoTime() < deadlineNanos) {
-                scheduleReadyApply(botId, expectedGeneration, deadlineNanos, 250L);
+                scheduleReadyApply(expectedSession, expectedGeneration, deadlineNanos, 250L);
             }
             else {
                 logger.warn("Bot {} never became ready for configured Paper player state", botId);
-                reapplyGenerations.remove(normalize(botId), expectedGeneration);
+                reapplyGenerations.remove(key, expectedGeneration);
             }
             return;
         }
 
         enqueue(botId, () -> {
-            BackendPolicy latestPolicy = findSession(botId).map(this::desiredPolicy)
-                .orElse(BackendPolicy.unchanged());
-            return send(botId, BackendOperation.APPLY_POLICY, latestPolicy);
+            if (!isExpectedSession(expectedSession)) {
+                return staleSessionFailure(expectedSession);
+            }
+            return sendPolicy(expectedSession, desiredPolicy(expectedSession));
         }).whenComplete((result, throwable) -> {
-            reapplyGenerations.remove(normalize(botId), expectedGeneration);
+            reapplyGenerations.remove(key, expectedGeneration);
             if (throwable != null) {
                 logger.warn("Could not reapply configured Paper player state for bot {}", botId, throwable);
             }
@@ -257,30 +398,53 @@ public final class VelocityBackendControlService implements BackendControlServic
         });
     }
 
-    private CompletionStage<BackendControlResult> send(String requestedBotId, BackendOperation operation,
+    private CompletionStage<BackendControlResult> send(BotSession expectedSession, BackendOperation operation,
                                                         BackendPolicy policy) {
-        String safeBotId = requestedBotId == null ? "" : requestedBotId.trim();
+        TargetResolution resolution = resolveTarget(expectedSession);
+        if (resolution.failure() != null) {
+            return CompletableFuture.completedFuture(resolution.failure());
+        }
+        return sendExact(resolution.target(), operation, policy);
+    }
+
+    private TargetResolution resolveTarget(BotSession expectedSession) {
+        String safeBotId = expectedSession.definition().id();
         if (!enabled()) {
-            return completedFailure(safeBotId, BackendStatus.PLUGIN_MISSING,
-                "Paper backend control is disabled. Enable runtime.backend-control and install Bots4VeloPaper.");
+            return TargetResolution.failure(BackendControlResult.failure(safeBotId, BackendStatus.PLUGIN_MISSING,
+                "Paper backend control is disabled. Enable runtime.backend-control and install Bots4VeloPaper."));
         }
-        Optional<BotSession> found = findSession(safeBotId);
-        if (found.isEmpty()) {
-            return completedFailure(safeBotId, BackendStatus.BAD_REQUEST, "Unknown bot.");
+        if (!isExpectedSession(expectedSession)) {
+            capabilityCache.remove(normalize(safeBotId));
+            return TargetResolution.failure(BackendControlResult.failure(
+                safeBotId, BackendStatus.BOT_NOT_ON_SERVER,
+                "The bot session was removed or replaced before the request could run."));
         }
-        BotSession session = found.get();
+        BotSession session = expectedSession;
         if (!session.isPlayable() || !session.isAuthenticationComplete()) {
-            return completedFailure(session.definition().id(), BackendStatus.BOT_NOT_ON_SERVER,
-                "The bot is not in PLAY or authentication is still pending.");
+            return TargetResolution.failure(BackendControlResult.failure(session.definition().id(),
+                BackendStatus.BOT_NOT_ON_SERVER, "The bot is not in PLAY or authentication is still pending."));
         }
         Optional<Player> player = proxy.getPlayer(session.definition().username());
         Optional<ServerConnection> connection = player.flatMap(Player::getCurrentServer);
         if (player.isEmpty() || connection.isEmpty()) {
+            return TargetResolution.failure(BackendControlResult.failure(session.definition().id(),
+                BackendStatus.BOT_NOT_ON_SERVER, "The bot is not connected to a Velocity backend."));
+        }
+        return TargetResolution.success(new ConnectedTarget(session, player.get(), connection.get()));
+    }
+
+    private CompletionStage<BackendControlResult> sendExact(ConnectedTarget target, BackendOperation operation,
+                                                             BackendPolicy policy) {
+        BotSession session = target.session();
+        Player player = target.player();
+        ServerConnection connection = target.connection();
+        if (!isCurrent(target)) {
+            capabilityCache.remove(normalize(session.definition().id()));
             return completedFailure(session.definition().id(), BackendStatus.BOT_NOT_ON_SERVER,
-                "The bot is not connected to a Velocity backend.");
+                "The bot changed backend before the request could be sent.");
         }
 
-        ControlRequest request = ControlRequest.create(player.get().getUniqueId(), operation, policy);
+        ControlRequest request = ControlRequest.create(player.getUniqueId(), operation, policy);
         byte[] payload;
         try {
             payload = ProtocolCodec.encodeRequest(request, secret);
@@ -291,8 +455,8 @@ public final class VelocityBackendControlService implements BackendControlServic
         }
 
         CompletableFuture<BackendControlResult> future = new CompletableFuture<>();
-        PendingRequest pendingRequest = new PendingRequest(session.definition().id(), request,
-            player.get(), connection.get(), payload, future);
+        PendingRequest pendingRequest = new PendingRequest(session, request,
+            player, connection, payload, future);
         synchronized (lifecycleLock) {
             if (!enabled()) {
                 future.complete(BackendControlResult.failure(session.definition().id(), BackendStatus.APPLY_FAILED,
@@ -304,9 +468,15 @@ public final class VelocityBackendControlService implements BackendControlServic
                     "Too many backend-control requests are pending."));
                 return future;
             }
+            if (!isCurrent(target)) {
+                capabilityCache.remove(normalize(session.definition().id()));
+                future.complete(BackendControlResult.failure(session.definition().id(),
+                    BackendStatus.BOT_NOT_ON_SERVER, "The bot changed backend before the request was sent."));
+                return future;
+            }
             pending.put(request.requestId(), pendingRequest);
             try {
-                boolean sent = connection.get().sendPluginMessage(CHANNEL, payload);
+                boolean sent = connection.sendPluginMessage(CHANNEL, payload);
                 if (!sent) {
                     pending.remove(request.requestId(), pendingRequest);
                     future.complete(BackendControlResult.failure(session.definition().id(),
@@ -322,12 +492,14 @@ public final class VelocityBackendControlService implements BackendControlServic
                 ScheduledTask timeout = proxy.getScheduler().buildTask(plugin, () -> {
                     if (pending.remove(request.requestId(), pendingRequest)) {
                         pendingRequest.cancelTasks();
-                        findSession(session.definition().id()).ifPresent(foundSession ->
-                            foundSession.recordExternalEvent("BACKEND_CONTROL",
-                                operation + ":" + BackendStatus.TIMEOUT));
+                        if (isExpectedSession(session)) {
+                            session.recordExternalEvent("BACKEND_CONTROL",
+                                operation + ":" + BackendStatus.TIMEOUT);
+                        }
                         String timeoutDetail = "No signed Paper acknowledgement arrived within "
                             + timeoutMillis + " ms after an idempotent retry.";
-                        if (operation == BackendOperation.APPLY_POLICY) {
+                        if (operation == BackendOperation.APPLY_POLICY
+                            || operation == BackendOperation.APPLY_POLICY_EXT) {
                             timeoutDetail += " Desired state was retained for convergence.";
                         }
                         future.complete(BackendControlResult.failure(session.definition().id(), BackendStatus.TIMEOUT,
@@ -349,6 +521,7 @@ public final class VelocityBackendControlService implements BackendControlServic
     private void retry(PendingRequest request) {
         synchronized (lifecycleLock) {
             if (closed || pending.get(request.requestId()) != request
+                || !isExpectedSession(request.session())
                 || request.player().getCurrentServer().orElse(null) != request.connection()) {
                 return;
             }
@@ -360,6 +533,29 @@ public final class VelocityBackendControlService implements BackendControlServic
                     request.requestId(), safeMessage(exception));
             }
         }
+    }
+
+    private boolean isCurrent(ConnectedTarget target) {
+        return enabled() && isExpectedSession(target.session())
+            && target.session().isPlayable() && target.session().isAuthenticationComplete()
+            && proxy.getPlayer(target.session().definition().username()).orElse(null) == target.player()
+            && target.player().getCurrentServer().orElse(null) == target.connection();
+    }
+
+    private boolean isExpectedSession(BotSession expectedSession) {
+        BotManager manager = managerSupplier.get();
+        return manager != null
+            && sameSession(expectedSession,
+                manager.find(expectedSession.definition().id()).orElse(null));
+    }
+
+    static boolean sameSession(Object expectedSession, Object currentSession) {
+        return expectedSession == currentSession;
+    }
+
+    private CompletionStage<BackendControlResult> staleSessionFailure(BotSession expectedSession) {
+        return completedFailure(expectedSession.definition().id(), BackendStatus.BOT_NOT_ON_SERVER,
+            "The bot session was removed or replaced before the operation could run.");
     }
 
     private Optional<BotSession> findSession(String botId) {
@@ -385,6 +581,7 @@ public final class VelocityBackendControlService implements BackendControlServic
         synchronized (policyLock) {
             BotSession owner = policyOwners.put(key, session);
             if (owner != null && owner != session) {
+                capabilityCache.remove(key);
                 desiredPolicies.put(key, configuredPolicy(session.definition().playerState()));
             }
             return desiredPolicies.computeIfAbsent(key,
@@ -434,6 +631,10 @@ public final class VelocityBackendControlService implements BackendControlServic
         BackendInvulnerability invulnerability = current.invulnerability();
         BackendGameMode gameMode = current.gameMode();
         RespawnPoint respawnPoint = current.respawnPoint();
+        ManagedBoolean sleepingIgnored = current.sleepingIgnored();
+        ManagedBoolean affectsSpawning = current.affectsSpawning();
+        ManagedBoolean pickupItems = current.pickupItems();
+        ManagedBoolean collidable = current.collidable();
         if (patch.invulnerabilityPresent()) {
             invulnerability = switch (patch.invulnerability()) {
                 case KEEP -> BackendInvulnerability.UNCHANGED;
@@ -447,7 +648,20 @@ public final class VelocityBackendControlService implements BackendControlServic
         if (patch.respawnPointPresent()) {
             respawnPoint = patch.respawnPoint();
         }
-        return new BackendPolicy(invulnerability, gameMode, respawnPoint);
+        if (patch.sleepingIgnoredPresent()) {
+            sleepingIgnored = patch.sleepingIgnored();
+        }
+        if (patch.affectsSpawningPresent()) {
+            affectsSpawning = patch.affectsSpawning();
+        }
+        if (patch.pickupItemsPresent()) {
+            pickupItems = patch.pickupItems();
+        }
+        if (patch.collidablePresent()) {
+            collidable = patch.collidable();
+        }
+        return new BackendPolicy(invulnerability, gameMode, respawnPoint,
+            sleepingIgnored, affectsSpawning, pickupItems, collidable);
     }
 
     static BackendPolicy configuredPolicy(BotPluginConfig.PlayerStateConfig state) {
@@ -472,13 +686,97 @@ public final class VelocityBackendControlService implements BackendControlServic
             case WORLD_SPAWN -> RespawnPoint.worldSpawn(configuredPoint.world());
             case CLEAR -> RespawnPoint.clear();
         };
-        return new BackendPolicy(invulnerability, gameMode, point);
+        return new BackendPolicy(invulnerability, gameMode, point,
+            managedBoolean(state.sleepingIgnored()), managedBoolean(state.affectsSpawning()),
+            managedBoolean(state.pickupItems()), managedBoolean(state.collidable()));
     }
 
     static boolean isUnchanged(BackendPolicy policy) {
         return policy.invulnerability() == BackendInvulnerability.UNCHANGED
             && policy.gameMode() == BackendGameMode.UNCHANGED
-            && policy.respawnPoint().mode() == RespawnMode.UNCHANGED;
+            && policy.respawnPoint().mode() == RespawnMode.UNCHANGED
+            && !hasManagedExtendedState(policy);
+    }
+
+    static boolean hasManagedExtendedState(BackendPolicy policy) {
+        return policy.sleepingIgnored() != ManagedBoolean.UNCHANGED
+            || policy.affectsSpawning() != ManagedBoolean.UNCHANGED
+            || policy.pickupItems() != ManagedBoolean.UNCHANGED
+            || policy.collidable() != ManagedBoolean.UNCHANGED;
+    }
+
+    static BackendOperation probeOperation(BackendCapabilityCache.Capabilities capabilities) {
+        return capabilities.probeExtended() ? BackendOperation.PROBE_EXT : BackendOperation.PROBE;
+    }
+
+    /**
+     * Selects the only wire operation that can faithfully carry this policy.
+     * An empty result deliberately rejects an extended policy for a legacy
+     * companion instead of silently dropping its additional fields.
+     */
+    static Optional<BackendOperation> policyOperation(
+        BackendPolicy policy,
+        BackendCapabilityCache.Capabilities capabilities
+    ) {
+        if (!hasManagedExtendedState(policy)) {
+            return Optional.of(BackendOperation.APPLY_POLICY);
+        }
+        if (capabilities != null && capabilities.applyPolicyExtended()) {
+            return Optional.of(BackendOperation.APPLY_POLICY_EXT);
+        }
+        return Optional.empty();
+    }
+
+    private static ManagedBoolean managedBoolean(BotPluginConfig.ManagedFlag flag) {
+        return switch (flag) {
+            case KEEP -> ManagedBoolean.UNCHANGED;
+            case ENABLED -> ManagedBoolean.ENABLED;
+            case DISABLED -> ManagedBoolean.DISABLED;
+        };
+    }
+
+    /** Clears connection-scoped state when a managed bot is removed at runtime. */
+    public void removeBot(String botId) {
+        String key = normalize(botId);
+        cancelPendingForBot(key, null, BackendStatus.BOT_NOT_ON_SERVER, BOT_REMOVED_DETAIL);
+        capabilityCache.remove(key);
+        synchronized (policyLock) {
+            desiredPolicies.remove(key);
+            policyOwners.remove(key);
+        }
+        reapplyGenerations.remove(key);
+    }
+
+    private void cancelPendingForBot(String botId, ServerConnection retainedConnection,
+                                     BackendStatus status, String detail) {
+        String key = normalize(botId);
+        List<PendingRequest> cancelled = new ArrayList<>();
+        synchronized (lifecycleLock) {
+            pending.forEach((requestId, request) -> {
+                if (shouldCancelPending(key, request.botId(), retainedConnection, request.connection())
+                    && pending.remove(requestId, request)) {
+                    request.cancelTasks();
+                    cancelled.add(request);
+                }
+            });
+        }
+        for (PendingRequest request : cancelled) {
+            if (isExpectedSession(request.session())) {
+                request.session().recordExternalEvent("BACKEND_CONTROL",
+                    request.operation() + ":" + status);
+            }
+            request.future().complete(BackendControlResult.failure(request.botId(), status, detail));
+        }
+    }
+
+    static boolean shouldCancelPending(String normalizedBotId, String pendingBotId,
+                                       Object retainedConnection, Object pendingConnection) {
+        return normalize(pendingBotId).equals(normalize(normalizedBotId))
+            && (retainedConnection == null || pendingConnection != retainedConnection);
+    }
+
+    static boolean retainsDesiredPolicy(BackendStatus status) {
+        return status == BackendStatus.OK || status == BackendStatus.TIMEOUT;
     }
 
     private static CompletionStage<BackendControlResult> completedFailure(String botId,
@@ -506,6 +804,7 @@ public final class VelocityBackendControlService implements BackendControlServic
             started = false;
             generation.incrementAndGet();
             reapplyGenerations.clear();
+            capabilityCache.clear();
             pending.forEach((id, request) -> {
                 if (pending.remove(id, request)) {
                     request.cancelTasks();
@@ -517,7 +816,56 @@ public final class VelocityBackendControlService implements BackendControlServic
         }
     }
 
+    /**
+     * A target snapshot bound to the exact Velocity objects used to send a
+     * request. Keeping all three references together prevents a capability
+     * result learned on one backend connection from being reused after a
+     * server switch or session replacement.
+     */
+    private record ConnectedTarget(
+        BotSession session,
+        Player player,
+        ServerConnection connection
+    ) {
+    }
+
+    private record TargetResolution(
+        ConnectedTarget target,
+        BackendControlResult failure
+    ) {
+        private static TargetResolution success(ConnectedTarget target) {
+            return new TargetResolution(target, null);
+        }
+
+        private static TargetResolution failure(BackendControlResult failure) {
+            return new TargetResolution(null, failure);
+        }
+    }
+
+    private record CapabilityNegotiation(
+        ConnectedTarget target,
+        BackendCapabilityCache.Capabilities capabilities,
+        BackendControlResult legacyProbe,
+        BackendControlResult failure
+    ) {
+        private static CapabilityNegotiation success(
+            ConnectedTarget target,
+            BackendCapabilityCache.Capabilities capabilities,
+            BackendControlResult legacyProbe
+        ) {
+            return new CapabilityNegotiation(target, capabilities, legacyProbe, null);
+        }
+
+        private static CapabilityNegotiation failure(
+            ConnectedTarget target,
+            BackendControlResult failure
+        ) {
+            return new CapabilityNegotiation(target, null, null, failure);
+        }
+    }
+
     private static final class PendingRequest {
+        private final BotSession session;
         private final String botId;
         private final UUID targetUuid;
         private final UUID requestId;
@@ -530,10 +878,11 @@ public final class VelocityBackendControlService implements BackendControlServic
         private volatile ScheduledTask timeout;
         private volatile ScheduledTask retry;
 
-        private PendingRequest(String botId, ControlRequest request, Player player,
+        private PendingRequest(BotSession session, ControlRequest request, Player player,
                                ServerConnection connection, byte[] payload,
                                CompletableFuture<BackendControlResult> future) {
-            this.botId = botId;
+            this.session = session;
+            this.botId = session.definition().id();
             this.targetUuid = request.targetUuid();
             this.requestId = request.requestId();
             this.nonce = request.nonce();
@@ -542,6 +891,10 @@ public final class VelocityBackendControlService implements BackendControlServic
             this.connection = connection;
             this.payload = payload.clone();
             this.future = future;
+        }
+
+        private BotSession session() {
+            return session;
         }
 
         private String botId() {

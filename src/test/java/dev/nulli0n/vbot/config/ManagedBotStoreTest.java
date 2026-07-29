@@ -63,7 +63,12 @@ class ManagedBotStoreTest {
             BotPluginConfig.ManagedGameMode.SURVIVAL,
             1_250L,
             new BotPluginConfig.RespawnPointConfig(
-                BotPluginConfig.RespawnPointMode.FIXED, "world", 12.5D, 64.0D, -8.25D, 180.0F));
+                BotPluginConfig.RespawnPointMode.FIXED, "world", 12.5D, 64.0D, -8.25D, 180.0F),
+            BotPluginConfig.AfkPreset.FARM,
+            BotPluginConfig.ManagedFlag.DISABLED,
+            BotPluginConfig.ManagedFlag.ENABLED,
+            BotPluginConfig.ManagedFlag.ENABLED,
+            BotPluginConfig.ManagedFlag.DISABLED);
         BotDefinition definition = new BotDefinition(
             base.id(), base.enabled(), base.username(), base.password(), base.targetServer(),
             base.protocolDetectionServer(), base.renderDistance(), base.auth(), base.serverSwitchCommand(),
@@ -78,7 +83,9 @@ class ManagedBotStoreTest {
             .definitions().get("protected01");
         assertThat(reloaded.playerState()).isEqualTo(playerState);
         assertThat(Files.readString(temporaryDirectory.resolve(ManagedBotStore.FILE_NAME)))
-            .contains("player-state:", "invulnerable: ENABLED", "game-mode: SURVIVAL", "mode: FIXED");
+            .contains("player-state:", "afk-preset: FARM", "invulnerable: ENABLED",
+                "sleep-ignored: DISABLED", "affects-spawning: ENABLED", "pickup-items: ENABLED",
+                "collidable: DISABLED", "game-mode: SURVIVAL", "mode: FIXED");
     }
 
     @Test

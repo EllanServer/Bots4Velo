@@ -32,12 +32,12 @@ public final class VBotCommand implements SimpleCommand {
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
     private static final List<String> ACTIONS = List.of(
         "help", "list", "status", "monitor", "history", "doctor", "servers", "server", "movehere",
-        "position", "move", "look", "behavior", "invulnerable", "gamemode", "spawnpoint", "respawn",
+        "position", "move", "look", "behavior", "afk", "recover", "invulnerable", "gamemode", "spawnpoint", "respawn",
         "create", "remove", "start", "stop", "reconnect", "command", "reload");
     private static final List<String> BOT_ID_ACTIONS = List.of(
         "status", "monitor", "history", "server", "movehere", "position", "move", "look", "remove",
         "start", "stop", "reconnect", "command", "behavior", "invulnerable", "gamemode", "spawnpoint",
-        "respawn");
+        "respawn", "afk", "recover");
 
     private final Bots4VeloPlugin plugin;
     private final PlayerStateCommandHandler playerStateCommands;
@@ -61,7 +61,7 @@ public final class VBotCommand implements SimpleCommand {
             return;
         }
         String action = args[0].toLowerCase(Locale.ROOT);
-        if (!hasPermission(source, action)) {
+        if (!hasPermission(source, action, args)) {
             source.sendMessage(Component.text(plugin.messages().text("no-permission",
                 "You do not have permission for /vbot %s.", action),
                 NamedTextColor.RED));
@@ -82,7 +82,7 @@ public final class VBotCommand implements SimpleCommand {
                 case "move" -> move(source, args);
                 case "look" -> look(source, args);
                 case "behavior" -> behavior(source, args);
-                case "invulnerable", "gamemode", "spawnpoint", "respawn" ->
+                case "afk", "recover", "invulnerable", "gamemode", "spawnpoint", "respawn" ->
                     playerState(source, action, args);
                 case "create" -> create(source, args);
                 case "remove" -> remove(source, args);
@@ -149,6 +149,11 @@ public final class VBotCommand implements SimpleCommand {
             var desired = session.definition().playerState();
             source.sendMessage(Component.text("Configured Paper state: invulnerable=" + desired.invulnerability()
                 + " | gamemode=" + desired.gameMode() + " | spawnpoint=" + desired.respawnPoint().mode()
+                + " | afkPreset=" + desired.afkPreset()
+                + " | sleepIgnored=" + desired.sleepingIgnored()
+                + " | affectsSpawning=" + desired.affectsSpawning()
+                + " | pickup=" + desired.pickupItems()
+                + " | collidable=" + desired.collidable()
                 + " | control=" + (plugin.backendControlEnabled() ? "enabled" : "disabled"),
                 NamedTextColor.GRAY));
             if (plugin.backendControlEnabled()) {
@@ -166,7 +171,13 @@ public final class VBotCommand implements SimpleCommand {
                     source.sendMessage(Component.text("Actual Paper state: invulnerable=" + actual.invulnerable()
                         + " | gamemode=" + actual.gameMode() + " | spawnpoint="
                         + actual.respawnPoint().mode()
-                        + (actual.respawnPoint().world().isBlank() ? "" : "@" + actual.respawnPoint().world()),
+                        + (actual.respawnPoint().world().isBlank() ? "" : "@" + actual.respawnPoint().world())
+                        + (actual.extendedPresent()
+                            ? " | sleepIgnored=" + actual.sleepingIgnored()
+                                + " | affectsSpawning=" + actual.affectsSpawning()
+                                + " | pickup=" + actual.pickupItems()
+                                + " | collidable=" + actual.collidable()
+                            : " | extendedAfk=unavailable"),
                         NamedTextColor.GREEN));
                 });
             }
@@ -618,6 +629,8 @@ public final class VBotCommand implements SimpleCommand {
                 "/vbot monitor [id] - Output monitoring JSON",
                 "/vbot reload - Reload configuration");
             case 3 -> List.of(
+                "/vbot afk <selector> status|preset|set|unmanage",
+                "/vbot recover <selector> - Heal, feed, extinguish and respawn",
                 "/vbot invulnerable <selector> <on|off|keep>",
                 "/vbot gamemode <selector> <mode|unchanged>",
                 "/vbot spawnpoint <selector> <mode|set ...>",
@@ -670,11 +683,16 @@ public final class VBotCommand implements SimpleCommand {
         }).orElse("");
     }
 
-    private boolean hasPermission(CommandSource source, String action) {
+    private boolean hasPermission(CommandSource source, String action, String[] args) {
         if (source.hasPermission(ADMIN_PERMISSION)) {
             return true;
         }
-        return source.hasPermission(permissionFor(action));
+        return source.hasPermission(permissionFor(action, args));
+    }
+
+    static String permissionFor(String action, String[] args) {
+        return action.equals("afk") && args.length >= 3 && args[2].equalsIgnoreCase("status")
+            ? VIEW_PERMISSION : permissionFor(action);
     }
 
     static String permissionFor(String action) {
@@ -725,6 +743,11 @@ public final class VBotCommand implements SimpleCommand {
             Map<String, Object> configured = new LinkedHashMap<>();
             configured.put("invulnerable", state.invulnerability().name());
             configured.put("gameMode", state.gameMode().name());
+            configured.put("afkPreset", state.afkPreset().name());
+            configured.put("sleepingIgnored", state.sleepingIgnored().name());
+            configured.put("affectsSpawning", state.affectsSpawning().name());
+            configured.put("pickupItems", state.pickupItems().name());
+            configured.put("collidable", state.collidable().name());
             configured.put("applyDelayMillis", state.applyDelayMillis());
             configured.put("respawnMode", state.respawnPoint().mode().name());
             configured.put("respawnWorld", state.respawnPoint().world());
@@ -827,7 +850,49 @@ public final class VBotCommand implements SimpleCommand {
         if (args.length == 3 && args[0].equalsIgnoreCase("spawnpoint")) {
             return matching(args[2], "current", "worldspawn", "clear", "set");
         }
+        if (args.length == 3 && args[0].equalsIgnoreCase("afk")) {
+            return afkActionSuggestions(args[2],
+                canUse(invocation.source(), VIEW_PERMISSION),
+                canUse(invocation.source(), CONTROL_PERMISSION));
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("afk")
+            && args[2].equalsIgnoreCase("preset")) {
+            if (!canUse(invocation.source(), CONTROL_PERMISSION)) {
+                return List.of();
+            }
+            return matching(args[3], "safe", "farm", "normal");
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("afk")
+            && args[2].equalsIgnoreCase("set")) {
+            if (!canUse(invocation.source(), CONTROL_PERMISSION)) {
+                return List.of();
+            }
+            return matching(args[3], "sleep-ignored", "affects-spawning", "pickup", "collision");
+        }
+        if (args.length == 5 && args[0].equalsIgnoreCase("afk")
+            && args[2].equalsIgnoreCase("set")) {
+            if (!canUse(invocation.source(), CONTROL_PERMISSION)) {
+                return List.of();
+            }
+            return matching(args[4], "on", "off", "keep");
+        }
         return List.of();
+    }
+
+    static List<String> afkActionSuggestions(String prefix, boolean canView, boolean canControl) {
+        List<String> values = new java.util.ArrayList<>();
+        if (canView) {
+            values.add("status");
+        }
+        if (canControl) {
+            values.addAll(List.of("preset", "set", "unmanage"));
+        }
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return values.stream().filter(value -> value.startsWith(normalized)).toList();
+    }
+
+    private static boolean canUse(CommandSource source, String permission) {
+        return source.hasPermission(ADMIN_PERMISSION) || source.hasPermission(permission);
     }
 
     private static List<String> matching(String prefix, String... values) {

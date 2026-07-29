@@ -160,7 +160,12 @@ public final class ManagedBotStore {
         respawnPoint.put("yaw", definition.playerState().respawnPoint().yaw());
 
         Map<String, Object> playerState = new LinkedHashMap<>();
+        playerState.put("afk-preset", definition.playerState().afkPreset().name());
         playerState.put("invulnerable", definition.playerState().invulnerability().name());
+        playerState.put("sleep-ignored", definition.playerState().sleepingIgnored().name());
+        playerState.put("affects-spawning", definition.playerState().affectsSpawning().name());
+        playerState.put("pickup-items", definition.playerState().pickupItems().name());
+        playerState.put("collidable", definition.playerState().collidable().name());
         playerState.put("game-mode", definition.playerState().gameMode().name());
         playerState.put("apply-delay-ms", definition.playerState().applyDelayMillis());
         playerState.put("respawn-point", respawnPoint);

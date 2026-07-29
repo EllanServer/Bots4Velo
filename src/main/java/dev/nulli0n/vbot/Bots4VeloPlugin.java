@@ -93,6 +93,11 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         public CompletionStage<BackendControlResult> respawn(String botId) {
             return activeBackendControl().respawn(botId);
         }
+
+        @Override
+        public CompletionStage<BackendControlResult> recover(String botId) {
+            return activeBackendControl().recover(botId);
+        }
     };
 
     @Inject
@@ -109,7 +114,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             managedBotStore = ManagedBotStore.load(dataDirectory);
             config = ConfigLoader.load(dataDirectory, managedBotStore.definitions());
             manager = new BotManager(config, logger, new VelocityBackendProtocolDetector(proxy));
-            backendControlClient = createBackendControl(config);
+            backendControlClient = createBackendControl(config, manager);
             proxy.getChannelRegistrar().register(BACKEND_CONTROL_CHANNEL);
             backendControlChannelRegistered = true;
             backendControlClient.start();
@@ -161,7 +166,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         try {
             replacement = new BotManager(replacementConfig, logger,
                 new VelocityBackendProtocolDetector(proxy));
-            replacementBackend = createBackendControl(replacementConfig);
+            replacementBackend = createBackendControl(replacementConfig, replacement);
             registerOptionalIntegrations(replacement, replacementConfig);
         }
         catch (RuntimeException exception) {
@@ -269,6 +274,10 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         store.remove(id);
         stopFollowing(id);
         active.remove(id);
+        VelocityBackendControlService control = backendControlClient;
+        if (control != null) {
+            control.removeBot(id);
+        }
         return ManagedRemoveResult.REMOVED;
     }
 
@@ -384,8 +393,9 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         return control == null ? BackendControlService.unavailable() : control;
     }
 
-    private VelocityBackendControlService createBackendControl(BotPluginConfig configuration) {
-        return new VelocityBackendControlService(proxy, this, logger, configuration, () -> manager);
+    private VelocityBackendControlService createBackendControl(BotPluginConfig configuration,
+                                                                BotManager owningManager) {
+        return new VelocityBackendControlService(proxy, this, logger, configuration, () -> owningManager);
     }
 
     private void unregisterBackendControlChannel() {

@@ -3,7 +3,10 @@ package dev.nulli0n.vbot.backend.protocol;
 public enum BackendOperation {
     PROBE(1),
     APPLY_POLICY(2),
-    RESPAWN(3);
+    RESPAWN(3),
+    PROBE_EXT(4),
+    APPLY_POLICY_EXT(5),
+    RECOVER(6);
 
     private final int id;
 

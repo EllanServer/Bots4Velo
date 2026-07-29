@@ -123,7 +123,17 @@ bots:
     # Server-authoritative player properties require the optional Paper
     # companion above. These safe defaults leave every property unchanged.
     player-state:
-      invulnerable: "KEEP" # KEEP, ENABLED or DISABLED
+      # NONE leaves the AFK flags below unchanged. SAFE enables invulnerability
+      # and sleep ignoring while disabling pickup and collision. FARM also
+      # enables affects-spawning. NORMAL explicitly restores ordinary values.
+      # Explicit fields below always override the selected preset.
+      afk-preset: "NONE" # NONE, SAFE, FARM or NORMAL
+      # Uncomment only the individual fields that should override the preset.
+      # invulnerable: "KEEP" # KEEP, ENABLED or DISABLED
+      # sleep-ignored: "KEEP" # KEEP, ENABLED or DISABLED
+      # affects-spawning: "KEEP" # KEEP, ENABLED or DISABLED
+      # pickup-items: "KEEP" # KEEP, ENABLED or DISABLED
+      # collidable: "KEEP" # KEEP, ENABLED or DISABLED
       game-mode: "KEEP" # KEEP, SURVIVAL, CREATIVE, ADVENTURE or SPECTATOR
       apply-delay-ms: 0
       respawn-point:
