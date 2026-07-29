@@ -65,11 +65,13 @@ class GithubWorkflowTest {
             .contains("VELOCITY_JAVA")
             .contains("download_authme '5.6.0' '-legacy.jar'")
             .contains("fallback-register-delay-ms: 1500")
+            .contains("TIMEOUT_FIXTURE_SELECTOR")
+            .contains("successfully registered")
             .contains("start-timeout-fixture")
             .contains("initial-delay-ms: 15000")
             .contains("login-delay-ms: 5000")
             .contains("presence-rules:")
             .contains("interval-ms: 1000")
-            .contains("confirmed server switch to afk");
+            .contains("-> afk has connected");
     }
 }

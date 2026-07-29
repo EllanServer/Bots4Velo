@@ -18,6 +18,12 @@ LOBBY_PORT="${LOBBY_PORT:-25591}"
 AFK_PORT="${AFK_PORT:-25592}"
 PAPER_START_TIMEOUT="${PAPER_START_TIMEOUT:-300}"
 PIDS=()
+TIMEOUT_FIXTURE_SELECTOR="AuthenticationTimeout"
+if [[ "$MINECRAFT_VERSION" == "1.16.5" ]]; then
+  # AuthMe 5.6 has no pre-join UI, so its timeout fixture would only exercise
+  # the server-side timeout and interfere with command-based registration.
+  TIMEOUT_FIXTURE_SELECTOR="@tag:ci-timeout-ui-only"
+fi
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -205,7 +211,7 @@ runtime:
   schedules:
     - id: "start-timeout-fixture"
       action: "start"
-      selector: "AuthenticationTimeout"
+      selector: "${TIMEOUT_FIXTURE_SELECTOR}"
       initial-delay-ms: 15000
       interval-ms: 3600000
   # Keeps the integration bot assigned to AFK. This deliberately retries the
@@ -240,7 +246,7 @@ bots:
       timeout-ms: 30000
       login-prompts: ["(?i)(please login|/login)"]
       register-prompts: ["(?i)(please register|/register)"]
-      success-messages: ["(?i)(registered successfully|logged in successfully|login successful)"]
+      success-messages: ["(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged)"]
       failure-messages: ["(?i)(incorrect password|captcha|2fa|verification code|banned)"]
   AuthenticationTimeout:
     enabled: false
@@ -314,7 +320,7 @@ log "Starting Velocity and Bots4Velo"
 start_velocity
 VELOCITY_LOG="$WORK_ROOT/velocity/console.log"
 wait_for_log "$VELOCITY_LOG" 'entered PLAY' 90
-wait_for_log "$VELOCITY_LOG" 'confirmed server switch to afk' 90
+wait_for_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" 90
 wait_for_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' 90
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
 wait_for_log "$VELOCITY_LOG" 'Bot AuthenticationTimeout stopped after authentication timed out after 2500 ms' 90
