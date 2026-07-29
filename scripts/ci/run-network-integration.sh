@@ -335,7 +335,7 @@ sleep 2
 start_paper afk "$AFK_PORT"
 wait_for_log "$WORK_ROOT/afk/console.log" 'Done \(' "$PAPER_START_TIMEOUT"
 wait_for_log "$WORK_ROOT/afk/console.log" "B4VCI_${PROTOCOL_ID} joined the game" 90
-wait_for_new_log "$VELOCITY_LOG" 'resource pack: SUCCESSFULLY_LOADED' "$velocity_log_lines" 90
+wait_for_new_log "$VELOCITY_LOG" "B4VCI_${PROTOCOL_ID} -> afk has connected" "$velocity_log_lines" 90
 
 log "Fault test: restart Velocity; enabled bot must return to PLAY"
 restart_velocity

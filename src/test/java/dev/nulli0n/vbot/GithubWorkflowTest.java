@@ -73,6 +73,7 @@ class GithubWorkflowTest {
             .contains("login-delay-ms: 5000")
             .contains("presence-rules:")
             .contains("interval-ms: 1000")
-            .contains("-> afk has connected");
+            .contains("-> afk has connected")
+            .contains("wait_for_new_log");
     }
 }
