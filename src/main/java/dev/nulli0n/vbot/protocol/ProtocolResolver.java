@@ -2,17 +2,16 @@ package dev.nulli0n.vbot.protocol;
 
 import dev.nulli0n.vbot.config.BotPluginConfig.ProxyEndpoint;
 import dev.nulli0n.vbot.config.BotPluginConfig.BotDefinition;
-import dev.nulli0n.vbot.protocol.ProtocolSelection;
-
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class ProtocolResolver {
     private final ProxyEndpoint endpoint;
     private final BotDefinition definition;
     private final ProtocolDetectionService detector;
-    private final AtomicReference<ProtocolVersion> cached = new AtomicReference<>();
-    private volatile String source = "unresolved";
+    private ProtocolVersion cached;
+    private String source = "unresolved";
+    /** Guarded by this; retires detector results already in flight. */
+    private long detectionEpoch;
 
     public ProtocolResolver(ProxyEndpoint endpoint, BotDefinition definition,
                             ProtocolDetectionService detector) {
@@ -22,7 +21,7 @@ public final class ProtocolResolver {
         ProtocolSelection configured = definition.protocolOverride() == null
             ? endpoint.protocol() : definition.protocolOverride();
         if (!configured.automatic()) {
-            cached.set(configured.fixedVersion());
+            cached = configured.fixedVersion();
             source = definition.protocolOverride() == null ? "manual-config" : "manual-bot-config";
         }
     }
@@ -32,26 +31,46 @@ public final class ProtocolResolver {
     }
 
     public ProtocolVersion resolve() throws IOException {
-        ProtocolVersion existing = cached.get();
-        if (existing != null) {
-            return existing;
+        while (true) {
+            long attemptEpoch;
+            synchronized (this) {
+                if (cached != null) {
+                    return cached;
+                }
+                attemptEpoch = detectionEpoch;
+            }
+
+            DetectedProtocol result = detector.detect(definition, endpoint);
+            synchronized (this) {
+                if (attemptEpoch != detectionEpoch) {
+                    // invalidateAutomaticDetection() retired this result while
+                    // the detector was running. Loop so this caller observes
+                    // the new cache or performs a detection in the new epoch.
+                    continue;
+                }
+                ProtocolVersion detected = result.requireSupported();
+                if (cached == null) {
+                    // Commit version and provenance as one state transition.
+                    // A concurrent detector that loses this race must return
+                    // the winner without overwriting its source.
+                    source = result.source();
+                    cached = detected;
+                }
+                return cached;
+            }
         }
-        DetectedProtocol result = detector.detect(definition, endpoint);
-        ProtocolVersion detected = result.requireSupported();
-        cached.compareAndSet(null, detected);
-        source = result.source();
-        return cached.get();
     }
 
-    public String source() {
+    public synchronized String source() {
         return source;
     }
 
-    public void invalidateAutomaticDetection() {
+    public synchronized void invalidateAutomaticDetection() {
         ProtocolSelection configured = definition.protocolOverride() == null
             ? endpoint.protocol() : definition.protocolOverride();
         if (configured.automatic()) {
-            cached.set(null);
+            detectionEpoch++;
+            cached = null;
             source = "unresolved";
         }
     }

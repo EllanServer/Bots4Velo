@@ -144,6 +144,8 @@ public final class ConfigChangePreview {
         addIfChanged(fields, "reconnect.jitter", current.jitter(), candidate.jitter());
         addIfChanged(fields, "reconnect.maximum-attempts", current.maximumAttempts(),
             candidate.maximumAttempts());
+        addIfChanged(fields, "reconnect.stable-reset-seconds", current.stableResetSeconds(),
+            candidate.stableResetSeconds());
     }
 
     private static void changedBackendControlFields(List<String> fields, BackendControlConfig current,

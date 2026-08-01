@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.nulli0n.bots4velo"
-version = providers.gradleProperty("pluginVersion").orElse("2.9.0").get()
+version = providers.gradleProperty("pluginVersion").orElse("3.0.0").get()
 
 java {
     toolchain {
@@ -130,7 +130,16 @@ val verifyShadowJar = tasks.register<JavaExec>("verifyShadowJar") {
 }
 
 tasks.check {
-    dependsOn(verifyShadowJar)
+    dependsOn(
+        verifyShadowJar,
+        ":transport-api:check",
+        ":backend-protocol:check",
+        ":paper-companion:check",
+        ":adapters:legacy-1_16_5:check",
+        ":adapters:modern-1_21_11:check",
+        ":adapters:modern-26_1:check",
+        ":adapters:modern-26_2:check"
+    )
 }
 
 val writeArtifactChecksum = tasks.register("writeArtifactChecksum") {

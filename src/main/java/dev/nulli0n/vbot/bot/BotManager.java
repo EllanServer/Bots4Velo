@@ -342,19 +342,52 @@ public final class BotManager implements AutoCloseable {
     }
 
     public CreateResult create(BotDefinition definition) {
-        if (sessions.size() >= config.runtime().maximumBots()) {
-            return CreateResult.LIMIT_REACHED;
-        }
+        Objects.requireNonNull(definition, "Bot definition must not be null");
+        BotSession session;
+        Throwable activationFailure;
         String key = definition.id().toLowerCase(Locale.ROOT);
-        BotSession session = createSession(definition);
-        if (sessions.putIfAbsent(key, session) != null) {
-            return CreateResult.ALREADY_EXISTS;
+        synchronized (activationLock) {
+            if (closed.get() || activationsPaused.get()) {
+                throw new IllegalStateException("Bot manager is not accepting new bots");
+            }
+            if (sessions.size() >= config.runtime().maximumBots()) {
+                return CreateResult.LIMIT_REACHED;
+            }
+            if (sessions.containsKey(key)) {
+                return CreateResult.ALREADY_EXISTS;
+            }
+            if (sessions.values().stream().anyMatch(existing ->
+                existing.definition().username().equalsIgnoreCase(definition.username()))) {
+                return CreateResult.ALREADY_EXISTS;
+            }
+            session = createSession(definition);
+            sessions.put(key, session);
+            activationEpochs.computeIfAbsent(key, ignored -> new AtomicLong());
+            try {
+                if (definition.enabled()
+                    && !scheduleActivation(session, 0, session::start, ActivationKind.START)) {
+                    throw new IllegalStateException("Bot activation could not be scheduled");
+                }
+                return CreateResult.CREATED;
+            }
+            catch (RuntimeException | Error failure) {
+                sessions.remove(key, session);
+                invalidateActivationLocked(key);
+                activationEpochs.remove(key);
+                maintenanceHolds.remove(key);
+                activationFailure = failure;
+            }
         }
-        activationEpochs.computeIfAbsent(key, ignored -> new AtomicLong());
-        if (definition.enabled()) {
-            scheduleActivation(session, 0, session::start, ActivationKind.START);
+        try {
+            session.stop();
         }
-        return CreateResult.CREATED;
+        catch (RuntimeException | LinkageError cleanupFailure) {
+            activationFailure.addSuppressed(cleanupFailure);
+        }
+        if (activationFailure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        throw (Error) activationFailure;
     }
 
     public boolean remove(String id) {
@@ -366,9 +399,16 @@ public final class BotManager implements AutoCloseable {
                 return false;
             }
             invalidateActivationLocked(key);
+            activationEpochs.remove(key);
             maintenanceHolds.remove(key);
         }
-        removed.stop();
+        try {
+            removed.stop();
+        }
+        catch (RuntimeException | LinkageError exception) {
+            logger.warn("Bot {} was removed but its transport cleanup failed",
+                removed.definition().id(), exception);
+        }
         return true;
     }
 

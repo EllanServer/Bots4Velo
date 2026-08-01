@@ -34,9 +34,10 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 - 目标服切换确认与持续重试；确认二次 PLAY 后才会执行传送等后续命令。
 - 能识别 VeloAuth 已在成功消息前后自动完成的切服，避免在目标服持续重复 `/server`。
 - `/vbot server` 通过 Velocity 连接 API 可靠切服，并取消旧的静态切服重试，避免机器人又被拉回。
-- `/vbot movehere` 自动识别执行者所在后端，先把机器人跨服，再传送到执行者身边。
+- `/vbot movehere` 接受批量选择器，自动识别执行者所在后端，先把匹配的机器人跨服，再逐个传送到执行者身边。
 - TAB 玩家列表/计分板包可由协议客户端正常接收；命令自身也提供机器人、服务器和帮助页补全。
-- 死亡重生和指数退避断线重连；所有首次连接及自动重连共享全局连接间隔。
+- 死亡重生和指数退避断线重连；有限重试预算只会在认证完成并稳定保持 PLAY 后重置，所有首次连接及
+  自动重连共享全局连接间隔。
 - `runtime.maximum-bots` 是静态机器人和运行时机器人合计的硬上限。
 - `/vbot status` 提供当前协议/状态以及本进程内累计 PLAY、非人工断线、资源包成功次数和时间戳，
   用于稳定性观察与故障审计。
@@ -68,8 +69,8 @@ Minecraft 无界面客户端，并通过真实协议连接回 Velocity；需要�
 
 默认会在 `build/libs` 生成两个用途严格区分的产物：
 
-- `bots4velo-2.9.0.jar`：安装到 Velocity 的 `plugins` 目录；
-- `bots4velo-paper-2.9.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
+- `bots4velo-3.0.0.jar`：安装到 Velocity 的 `plugins` 目录；
+- `bots4velo-paper-3.0.0.jar`：安装到网络中每一个 Paper 后端的 `plugins` 目录。
 
 也可以通过 `-PpluginVersion=<version>` 同时覆盖两个产物的版本号。
 `check` 还会从最终阴影 JAR 中加载一次已重定位的协议客户端，避免只验证未打包的开发类路径。
@@ -84,20 +85,21 @@ Velocity JAR 同时包含四套隔离协议栈，因此文件会明显大于 Pap
 
 每次大版本会自动执行测试、构建两个阴影 JAR、上传 GitHub Actions artifact，并创建同名
 GitHub Release（附带两个 JAR、各自的 SHA-256 和自动生成的 Release Notes）。仅 `vX.0.0` 形式的标签会触发，
-例如 `v2.0.0`；次版本与修订版本标签（例如 `v2.1.0`、`v2.0.1`）不会触发发布。普通 commit 和 Pull Request
-由独立的 `Build and test` 工作流执行 `check` 与阴影 JAR 构建。
+例如 `v3.0.0`；次版本与修订版本标签（例如 `v3.1.0`、`v3.0.1`）不会触发发布。普通 commit 和 Pull Request
+由独立的 `Build and test` 工作流执行根项目及全部子项目的 `check` 与阴影 JAR 构建；大版本发布也会先复用这套完整质量门，
+包括四个协议目标的临时网络集成，全部成功后才创建 Release。
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag v3.0.0
+git push origin v3.0.0
 ```
 
-发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v2.0.0` 生成
-`bots4velo-2.0.0.jar`、`bots4velo-paper-2.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
+发布构建会将标签去掉前缀 `v` 后作为插件版本，例如 `v3.0.0` 生成
+`bots4velo-3.0.0.jar`、`bots4velo-paper-3.0.0.jar` 及各自的 `.sha256` 校验文件。每一个大版本都应先完成
 测试、更新文档与配置示例，再 commit、push、创建并推送对应标签。
 
-`v2.9.0` 属于次版本标签，不会触发上述大版本工作流；需要发布时应先等待普通 CI 全绿，再手动创建
-同名 GitHub Release，并同时上传两个 JAR 与两个校验文件。
+`v3.0.0` 符合大版本标签规则，会直接触发 `build-major-release.yml`；工作流成功后会自动创建同名
+GitHub Release，并上传两个 JAR 与两个校验文件，无需再手动创建 Release。
 
 ## 集成验证
 
@@ -125,6 +127,11 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 认证配置可用 `auth.timeout-ms`（默认 `30000`）限定认证流程；到期后机器人停止重试，并记录
 `AUTH_TIMEOUT` 事件及明确的失败原因。设置为 `0` 可禁用该上限。
 
+`runtime.reconnect.maximum-attempts` 为 `0` 时持续重试，设为正整数时表示一次连续故障最多允许的自动
+重连次数。连接短暂进入 PLAY 不再清空这项有限预算：机器人必须完成认证，并连续保持 PLAY 达到
+`runtime.reconnect.stable-reset-seconds` 后才重置计数。该稳定窗口默认 `30` 秒；设为 `0` 时会在 PLAY
+与认证两个条件均满足后立即重置。这样反复“刚上线就掉线”的连接最终会进入 `FAILED`，而不是无限续期。
+
 如需 Prometheus，设置 `runtime.prometheus-port` 为非零端口（默认绑定 `127.0.0.1`），即可读取
 `/metrics`：每个机器人会输出在线状态、重连次数、断线数、资源包确认数、在线时长及失败分类。
 
@@ -147,11 +154,11 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 /vbot doctor [id|selector]
 /vbot servers
 /vbot server <id|selector> <server>
-/vbot movehere <id>
+/vbot movehere <id|selector>
 /vbot position <id>
 /vbot move <id> <x> <y> <z>
 /vbot look <id> <yaw> <pitch>
-/vbot create <id> <username> <password|-> [target-server|-]
+/vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]
 /vbot remove <id>
 /vbot start <id|selector>
 /vbot stop <id|selector>
@@ -205,7 +212,7 @@ Linux 上单独执行。现有本地隔离网络启动后还可执行：
 `bots4velo.create` 用于创建/删除运行时机器人、`bots4velo.reload` 用于重载；
 `bots4velo.admin` 拥有全部权限。
 
-### 2.9.0 运维控制
+### 运维控制
 
 维护锁适合后端升级、账号排查和临时停机。`hold` 会立即停止匹配的机器人、取消尚未执行的启动，随后阻止
 手动 `start`/`reconnect` 以及计划任务、presence 保活和断线自动重连再次将它们上线。可写自由文本原因；
@@ -330,9 +337,13 @@ bots:
 字段保持英文，便于脚本、文档和跨语言管理员使用一致语法。
 
 `/vbot help` 分为概览与队列、服务器与生命周期、行为与移动、管理与语言、Paper 玩家状态五页。帮助只显示
-执行者有权使用的命令；点击命令会把命令安全填入聊天栏，只有只读翻页和查看操作会直接执行。悬停可查看
-说明和所需权限。界面默认使用英文；需要中文时执行 `/vbot language zh_CN`，切回英文使用
-`/vbot language en_US`。
+执行者有权使用的命令；拥有 `bots4velo.view`、`bots4velo.control`、`bots4velo.create`、
+`bots4velo.reload` 或 `bots4velo.admin` 中任一角色即可打开根命令和帮助，而不必额外拥有 view 权限。
+点击命令会把命令安全填入聊天栏，只有只读翻页和查看操作会直接执行。悬停可查看说明和所需权限。
+补全同样按角色过滤：只读用户的 `behavior` 只提示 `status`，控制用户才会看到 `start`、`pause`、
+`follow`、`unfollow`；单机器人命令只提示精确 ID，批量命令才提示选择器，`remove` 只提示受管理的 ID，
+服务器、语言、状态、行为动作和在线玩家名也会在对应参数位置精确提示。界面默认使用英文；需要中文时执行
+`/vbot language zh_CN`，切回英文使用 `/vbot language en_US`。
 
 `/vbot doctor [id|selector]` 会先进行不替换线上机器人的配置验证，再报告后端数量、TAB/
 VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、资源包和 Auth UI 计数。`/vbot reload --check`
@@ -345,7 +356,8 @@ VelocityScoreboardAPI 是否存在、目标服、协议状态、认证凭据、�
 模板后，再由自身字段覆盖。密码必须在 `password`、`password-env`、`password-secret` 中三选一。
 `password-env` 从 Velocity 进程环境读取；`password-secret` 从
 `plugins/bots4velo/secrets.yml` 的 `passwords.<name>` 读取。首次生成配置会同时生成
-`secrets.yml.example`，复制为 `secrets.yml` 后填写密码，并确保该文件不进入版本库。
+`secrets.yml.example`，复制为 `secrets.yml` 后填写密码，并确保该文件不进入版本库。手写主
+`config.yml` 仍兼容已有的内联 `password`，但新配置推荐只使用机密或环境变量引用。
 
 ```yaml
 templates:
@@ -384,6 +396,10 @@ bots:
 `/minecraft:tp` 跟随，因此目标玩家仍需目标后端的传送权限。`unfollow` 会停止该任务。
 行为和登录后命令均可使用 `{id}`、`{username}`、`{password}` 与 `{server}` 占位符。
 
+`/vbot behavior <id|selector> status` 是只读查看，使用 `bots4velo.view`；`start`、`pause`、`follow` 与
+`unfollow` 会改变运行状态，使用 `bots4velo.control`。这让监控角色可以查看当前模式、是否运行、周期数、
+最近动作和跟随目标，而无需获得行为控制能力。
+
 `runtime.schedules` 支持重复执行 `start`、`stop`、`reconnect` 或 `server` 操作；每项指定唯一
 `id` 与 `selector`，`server` 操作另需指定 `server`。可使用 `initial-delay-ms` 与 `interval-ms` 做相对
 间隔，也可用 `at: "HH:mm"` 和 IANA `timezone`（例如 `Asia/Singapore`）每天在指定时刻上线、离线、重连
@@ -412,14 +428,33 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 再由完整重连恢复。post-join 模式不受这个配置阶段限制。
 
 `create` 创建的机器人会原子写入 `plugins/bots4velo/managed-bots.yml`，不会重写带注释的
-主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。密码和目标服位置使用
-`-` 表示禁用认证或留空。密码会像主配置一样以明文保存在服务器本地，应限制数据目录访问权限，
-并优先从 Velocity 控制台执行含密码的创建命令。
+主 `config.yml`，重启后自动恢复；`remove` 只允许删除这类受管理机器人。新建命令不接受内联密码，
+第三个参数必须是 `secret:<name>`、`env:<NAME>` 或 `-`。目标服仍可用 `-` 留空。例如：
 
-`server` 只在机器人进入 PLAY 且认证完成后执行，并使用 Velocity 注册的后端名称。`movehere`
-必须由游戏内玩家执行；它会让执行者向当前后端提交
-`/minecraft:tp <机器人> <执行者>`，因此执行者还需要该后端的传送权限。切服期间执行者离开目标服时，
-操作会安全取消。
+```text
+/vbot create Farm02 AFK_Farm02 secret:farm02 survival
+/vbot create Backup01 AFK_Backup01 env:BOTS4VELO_BACKUP_PASSWORD lobby
+/vbot create Observer AFK_Observer - -
+```
+
+`secret:farm02` 从 `plugins/bots4velo/secrets.yml` 的 `passwords.farm02` 读取；`env:...` 从 Velocity
+进程环境读取；`-` 创建无需认证的机器人。保存时 `managed-bots.yml` 只写 `password-secret` 或
+`password-env` 引用，不写解析后的密码；无需认证时不写密码字段。引用在创建时必须能够解析为非空值，
+否则创建失败且不会留下半写入记录。
+
+旧版 `managed-bots.yml` 中已经存在的内联 `password` 仍可加载并原样保留，避免升级后机器人突然丢失；
+但 `/vbot doctor` 会逐个给出迁移警告，新 `/vbot create` 也不会再生成这种记录。迁移步骤：
+
+1. 先把每个旧密码写入 `plugins/bots4velo/secrets.yml` 的 `passwords.<别名>`，或设置 Velocity 进程环境变量；
+2. 备份 `managed-bots.yml`，将该机器人的 `password: ...` 替换为 `password-secret: <别名>` 或
+   `password-env: <变量名>`，不要同时保留多个密码来源；
+3. 执行 `/vbot reload --check`，确认验证成功且脱敏差异符合预期，再执行 `/vbot reload`；
+4. 再次执行 `/vbot doctor <id>`，确认旧版明文警告已经消失。
+
+`server` 只在机器人进入 PLAY 且认证完成后执行，并使用 Velocity 注册的后端名称。`movehere` 接受单个
+ID 或任一批量选择器，但必须由游戏内玩家执行；插件会先把每个匹配机器人切到执行者当前后端，再让执行者
+逐个提交 `/minecraft:tp <机器人> <执行者>`，因此执行者还需要该后端的传送权限。切服期间执行者或对应
+机器人离开目标服时，该机器人的操作会安全取消。
 
 `move` 发送正常客户端移动包，不具备服务端传送权限；距离过大、碰撞或越界时，后端可能用位置包
 校正机器人。`position` 和 `monitor` 会反映最近一次客户端接受的服务器位置，`pitch` 范围为
@@ -428,7 +463,7 @@ start/stop/reconnect，并注册 `BotEvent` 监听器；API 只在 Bots4Velo 完
 ### AuthMe、AuthMeUI 与 Smart AuthMe Login UI
 
 这里的 **AuthMeUI** 特指 [`TejasLamba2006/AuthMeUI 1.3.4`](https://modrinth.com/plugin/authmeui/version/1.3.4)，
-不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 2.9.0 支持它的两种工作方式：
+不是 AuthMe 6 自带的 Dialog，也不是名称相近的其他 UI 插件。Bots4Velo 3.0.0 支持它的两种工作方式：
 
 - pre-join：在 CONFIGURATION 阶段依次处理服务器规则、注册或登录 Dialog，完成后才进入 PLAY；
 - post-join：进入 PLAY 后处理 AuthMeUI 的登录/注册 Dialog，再继续切服和登录后命令；

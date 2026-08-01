@@ -49,6 +49,7 @@ public final class BotSession implements BehaviorTarget {
     private final ScheduledExecutorService executor;
     private final Logger logger;
     private final ReconnectPolicy reconnectPolicy;
+    private final ReconnectStabilityGate reconnectStability;
     private final BotBehaviorRunner behavior;
     private final AuthenticationSettleGate authenticationSettle;
     private final BotEventLog events;
@@ -86,6 +87,8 @@ public final class BotSession implements BehaviorTarget {
 
     private volatile BotTransport transport;
     private volatile ScheduledFuture<?> reconnectTask;
+    /** Guarded by this; invalidates scheduled/running session connection attempts. */
+    private long connectionAttemptEpoch;
     private volatile ScheduledFuture<?> serverSwitchTask;
     private volatile ScheduledFuture<?> authenticationTimeoutTask;
     private volatile Instant connectedAt;
@@ -130,6 +133,9 @@ public final class BotSession implements BehaviorTarget {
         this.maintenanceBlocked = maintenanceBlocked == null ? () -> false : maintenanceBlocked;
         this.events = new BotEventLog(definition.id());
         this.reconnectPolicy = new ReconnectPolicy(runtime.reconnect());
+        this.reconnectStability = new ReconnectStabilityGate(executor,
+            Duration.ofSeconds(runtime.reconnect().stableResetSeconds()),
+            this::resetReconnectAttemptsIfStable);
         this.behavior = new BotBehaviorRunner(this, definition.behavior(), executor, logger);
         this.authenticationSettle = new AuthenticationSettleGate(executor);
         this.loginPrompts = compile(definition.auth().loginPrompts());
@@ -214,6 +220,7 @@ public final class BotSession implements BehaviorTarget {
 
     public synchronized void stop() {
         manualStop.set(true);
+        reconnectStability.invalidate();
         event("STOPPED", "operator request");
         generation.incrementAndGet();
         cancelReconnect();
@@ -245,6 +252,7 @@ public final class BotSession implements BehaviorTarget {
     }
 
     private void reconnectInternal(String source) {
+        reconnectStability.invalidate();
         manualStop.set(false);
         event("RECONNECT_REQUESTED", source);
         generation.incrementAndGet();
@@ -365,9 +373,15 @@ public final class BotSession implements BehaviorTarget {
         cancelServerSwitch();
     }
 
-    private void connectIfNeeded() {
+    private void connectIfNeeded(long attemptEpoch) {
         long currentGeneration;
         synchronized (this) {
+            if (attemptEpoch != connectionAttemptEpoch) {
+                return;
+            }
+            // This runnable may clear only the metadata it was scheduled with.
+            // A cancelled runnable can already be running and waiting for this
+            // monitor while a replacement task is installed.
             reconnectTask = null;
             nextConnectionAttempt = null;
             if (manualStop.get() || maintenanceBlocked.getAsBoolean()) {
@@ -380,6 +394,7 @@ public final class BotSession implements BehaviorTarget {
             }
 
             currentGeneration = generation.incrementAndGet();
+            reconnectStability.connectionStarted(currentGeneration);
             resetConnectionState();
             state.set(BotState.CONNECTING);
         }
@@ -387,9 +402,8 @@ public final class BotSession implements BehaviorTarget {
         BotTransport created = null;
         try {
             ProtocolVersion protocol = protocolResolver.resolve();
-            activeProtocolVersion = protocol;
-            activeProtocol = protocol.displayName() + " (" + protocol.protocolId() + ")";
-            activeProtocolSource = protocolResolver.source();
+            String resolvedProtocol = protocol.displayName() + " (" + protocol.protocolId() + ")";
+            String resolvedProtocolSource = protocolResolver.source();
             UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + definition.username())
                 .getBytes(StandardCharsets.UTF_8));
             TransportConfig transportConfig = new TransportConfig(
@@ -398,14 +412,23 @@ public final class BotSession implements BehaviorTarget {
                 runtime.resourcePackMode() == ResourcePackMode.ACCEPT_WITHOUT_DOWNLOAD,
                 runtime.resourcePackStepDelayMillis(), runtime.autoRespawn()
             );
-            if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
-                settleCancelledConnection();
-                return;
+            synchronized (this) {
+                if (!isConnectionAttemptCurrentLocked(attemptEpoch, currentGeneration)
+                    || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+                    settleCancelledConnection();
+                    return;
+                }
+                // Publish diagnostics only for the still-current connection
+                // attempt. A detector retired by stop/reconnect must not
+                // overwrite the replacement attempt's protocol metadata.
+                activeProtocolVersion = protocol;
+                activeProtocol = resolvedProtocol;
+                activeProtocolSource = resolvedProtocolSource;
             }
             created = transportRegistry.create(protocol, transportConfig,
                 new SessionTransportListener(currentGeneration), executor);
             synchronized (this) {
-                if (!isCurrent(currentGeneration) || manualStop.get()
+                if (!isConnectionAttemptCurrentLocked(attemptEpoch, currentGeneration) || manualStop.get()
                     || maintenanceBlocked.getAsBoolean()) {
                     settleCancelledConnection();
                 }
@@ -430,13 +453,20 @@ public final class BotSession implements BehaviorTarget {
                 }
                 closeCancelledTransport(created);
             }
-            if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
-                settleCancelledConnection();
-                return;
+            synchronized (this) {
+                if (!isConnectionAttemptCurrentLocked(attemptEpoch, currentGeneration)
+                    || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
+                    settleCancelledConnection();
+                    return;
+                }
+                reconnectStability.invalidate();
+                long reconnectGeneration = generation.incrementAndGet();
+                lastDisconnectReason = exception.getMessage() == null
+                    ? exception.getClass().getSimpleName() : exception.getMessage();
+                logger.warn("Bot {} could not start its connection: {}",
+                    definition.id(), lastDisconnectReason, exception);
+                scheduleReconnect(reconnectGeneration);
             }
-            lastDisconnectReason = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
-            logger.warn("Bot {} could not start its connection: {}", definition.id(), lastDisconnectReason, exception);
-            scheduleReconnect(currentGeneration);
         }
     }
 
@@ -478,13 +508,14 @@ public final class BotSession implements BehaviorTarget {
         serverSwitchAttempts.set(0);
     }
 
-    private void onTransportState(long currentGeneration, TransportState transportState) {
+    private synchronized void onTransportState(long currentGeneration, TransportState transportState) {
         if (!isCurrent(currentGeneration)) {
             return;
         }
         switch (transportState) {
             case LOGIN -> {
                 state.set(BotState.LOGIN);
+                reconnectStability.leftPlay(currentGeneration);
                 behavior.onUnavailable();
                 if (definition.auth().mode() != AuthMode.NONE) {
                     // AuthMe's modern UI can be presented before the first
@@ -499,6 +530,7 @@ public final class BotSession implements BehaviorTarget {
             }
             case CONFIGURATION -> {
                 state.set(BotState.CONFIGURATION);
+                reconnectStability.leftPlay(currentGeneration);
                 behavior.onUnavailable();
                 if (serverSwitchPending.get()) {
                     serverSwitchTransitionSeen.set(true);
@@ -506,7 +538,7 @@ public final class BotSession implements BehaviorTarget {
             }
             case PLAY -> {
                 state.set(BotState.PLAY);
-                reconnectAttempts.set(0);
+                reconnectStability.enteredPlay(currentGeneration);
                 playTransitionsThisConnection.incrementAndGet();
                 boolean firstPlay = playInitialized.compareAndSet(false, true);
                 if (firstPlay) {
@@ -554,41 +586,41 @@ public final class BotSession implements BehaviorTarget {
             return;
         }
         scheduleAuthenticationTimeout(currentGeneration);
-        executor.schedule(() -> {
-            if (!shouldRunChatAuthentication(
-                isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
-                return;
-            }
-            runInitialChatAuthentication(currentGeneration, mode);
-        }, initialAuthenticationDelayMillis(activeProtocolVersion, definition.auth().loginDelayMillis(),
+        executor.schedule(() -> runInitialChatAuthentication(currentGeneration, mode),
+            initialAuthenticationDelayMillis(activeProtocolVersion, definition.auth().loginDelayMillis(),
             definition.auth().uiDetectionGraceMillis()), TimeUnit.MILLISECONDS);
     }
 
-    private void runInitialChatAuthentication(long currentGeneration, AuthMode mode) {
+    private synchronized void runInitialChatAuthentication(long currentGeneration, AuthMode mode) {
+        if (!shouldRunChatAuthentication(
+            isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
+            return;
+        }
         AuthenticationUiType prompted = deferredChatAuthenticationPrompt.getAndSet(null);
         AuthenticationUiType selected = prompted != null && authenticationTypeExpected(mode, prompted)
             ? prompted
             : mode == AuthMode.REGISTER ? AuthenticationUiType.REGISTER : AuthenticationUiType.LOGIN;
         if (selected == AuthenticationUiType.REGISTER) {
             sendRegister();
-            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
             return;
         }
         sendLogin();
         if (mode == AuthMode.LOGIN) {
-            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
             return;
         }
-        executor.schedule(() -> {
-            if (shouldRunChatAuthentication(
-                isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
-                sendRegister();
-                scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
-            }
-        }, definition.auth().fallbackRegisterDelayMillis(), TimeUnit.MILLISECONDS);
+        executor.schedule(() -> runFallbackRegistration(currentGeneration),
+            definition.auth().fallbackRegisterDelayMillis(), TimeUnit.MILLISECONDS);
     }
 
-    private void handleAuthMessage(long currentGeneration, String message) {
+    private synchronized void runFallbackRegistration(long currentGeneration) {
+        if (!shouldRunChatAuthentication(
+            isPlayable(currentGeneration), !authenticationOutcome.pending(), authenticationUiActive())) {
+            return;
+        }
+        sendRegister();
+    }
+
+    private synchronized void handleAuthMessage(long currentGeneration, String message) {
         if (!isCurrent(currentGeneration) || !authenticationOutcome.pending()
             || definition.auth().mode() == AuthMode.NONE) {
             return;
@@ -621,7 +653,6 @@ public final class BotSession implements BehaviorTarget {
                 return;
             }
             sendRegister();
-            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
         else if (matches(loginPrompts, message)) {
             if (authenticationUiActive()) {
@@ -634,7 +665,6 @@ public final class BotSession implements BehaviorTarget {
                 return;
             }
             sendLogin();
-            scheduleAuthCompletionIfNoSuccessPattern(currentGeneration);
         }
     }
 
@@ -650,7 +680,7 @@ public final class BotSession implements BehaviorTarget {
         return true;
     }
 
-    private void failAuthentication(long currentGeneration, String message) {
+    private synchronized void failAuthentication(long currentGeneration, String message) {
         if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
             return;
         }
@@ -669,19 +699,23 @@ public final class BotSession implements BehaviorTarget {
         if (authenticationTimeoutTask != null && !authenticationTimeoutTask.isDone()) {
             return;
         }
-        authenticationTimeoutTask = executor.schedule(() -> {
-            if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
-                return;
-            }
-            lastDisconnectReason = "authentication timed out after " + timeout + " ms";
-            event("AUTH_TIMEOUT", Long.toString(timeout));
-            logger.warn("Bot {} stopped after authentication timed out after {} ms", definition.id(), timeout);
-            stopAfterAuthenticationFailure();
-        }, timeout, TimeUnit.MILLISECONDS);
+        authenticationTimeoutTask = executor.schedule(
+            () -> authenticationTimedOut(currentGeneration, timeout), timeout, TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void authenticationTimedOut(long currentGeneration, long timeout) {
+        if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
+            return;
+        }
+        lastDisconnectReason = "authentication timed out after " + timeout + " ms";
+        event("AUTH_TIMEOUT", Long.toString(timeout));
+        logger.warn("Bot {} stopped after authentication timed out after {} ms", definition.id(), timeout);
+        stopAfterAuthenticationFailure();
     }
 
     private synchronized void stopAfterAuthenticationFailure() {
         cancelAuthenticationTimeout();
+        reconnectStability.invalidate();
         authenticationSettle.cancel();
         authenticationInterventionRequired.set(true);
         manualStop.set(true);
@@ -695,7 +729,8 @@ public final class BotSession implements BehaviorTarget {
         state.set(BotState.FAILED);
     }
 
-    private void handleAuthenticationUi(long currentGeneration, AuthenticationUiChallenge challenge) {
+    private synchronized void handleAuthenticationUi(long currentGeneration,
+                                                     AuthenticationUiChallenge challenge) {
         if (!isCurrent(currentGeneration)) {
             return;
         }
@@ -870,7 +905,7 @@ public final class BotSession implements BehaviorTarget {
         return authenticationUiFlow.active() || authenticationCommandUiActive.get();
     }
 
-    private void failAuthenticationUi(long currentGeneration, String stage, String reason) {
+    private synchronized void failAuthenticationUi(long currentGeneration, String stage, String reason) {
         if (!isCurrent(currentGeneration) || !authenticationOutcome.fail()) {
             return;
         }
@@ -992,21 +1027,7 @@ public final class BotSession implements BehaviorTarget {
         }
     }
 
-    private void scheduleAuthCompletion(long currentGeneration) {
-        executor.schedule(() -> {
-            if (!authenticationUiActive()) {
-                completeAuthentication(currentGeneration);
-            }
-        }, definition.auth().afterAuthDelayMillis(), TimeUnit.MILLISECONDS);
-    }
-
-    private void scheduleAuthCompletionIfNoSuccessPattern(long currentGeneration) {
-        if (successMessages.isEmpty()) {
-            scheduleAuthCompletion(currentGeneration);
-        }
-    }
-
-    private boolean completeAuthentication(long currentGeneration) {
+    private synchronized boolean completeAuthentication(long currentGeneration) {
         if (!isPlayable(currentGeneration) || !authenticationOutcome.succeed()) {
             return false;
         }
@@ -1014,7 +1035,7 @@ public final class BotSession implements BehaviorTarget {
         return true;
     }
 
-    private boolean completeAuthenticationAfterSettle(long currentGeneration) {
+    private synchronized boolean completeAuthenticationAfterSettle(long currentGeneration) {
         if (!isPlayable(currentGeneration) || !authenticationOutcome.succeed()) {
             return false;
         }
@@ -1035,7 +1056,7 @@ public final class BotSession implements BehaviorTarget {
             () -> applyAuthenticationSuccessWhenPlayable(currentGeneration));
     }
 
-    private boolean applyAuthenticationSuccessWhenPlayable(long currentGeneration) {
+    private synchronized boolean applyAuthenticationSuccessWhenPlayable(long currentGeneration) {
         if (!isCurrent(currentGeneration) || !authenticationOutcome.succeeded()) {
             return true;
         }
@@ -1050,11 +1071,15 @@ public final class BotSession implements BehaviorTarget {
         return true;
     }
 
-    private void applyAuthenticationSuccess(long currentGeneration) {
+    private synchronized void applyAuthenticationSuccess(long currentGeneration) {
         if (!isPlayable(currentGeneration) || !authenticationOutcome.succeeded()
             || !authenticationContinuationApplied.compareAndSet(false, true)) {
             return;
         }
+        // A successful chat/UI match alone is not enough to renew the retry
+        // budget. Start the stability window only once the post-auth flow is
+        // actually applied while this transport remains in PLAY.
+        reconnectStability.authenticationCompleted(currentGeneration);
         authenticationUiFlow.complete();
         authenticationCommandUiActive.set(false);
         deferredChatAuthenticationPrompt.set(null);
@@ -1082,7 +1107,7 @@ public final class BotSession implements BehaviorTarget {
         attemptServerSwitch(currentGeneration);
     }
 
-    private void attemptServerSwitch(long currentGeneration) {
+    private synchronized void attemptServerSwitch(long currentGeneration) {
         if (!isCurrent(currentGeneration) || manualStop.get() || !serverSwitchPending.get()) {
             return;
         }
@@ -1145,7 +1170,7 @@ public final class BotSession implements BehaviorTarget {
         executor.schedule(() -> sendWhenPlayable(currentGeneration, command, 0), delay, TimeUnit.MILLISECONDS);
     }
 
-    private void sendWhenPlayable(long currentGeneration, String command, int attempt) {
+    private synchronized void sendWhenPlayable(long currentGeneration, String command, int attempt) {
         if (!isCurrent(currentGeneration) || manualStop.get() || maintenanceBlocked.getAsBoolean()) {
             return;
         }
@@ -1161,10 +1186,15 @@ public final class BotSession implements BehaviorTarget {
         }
     }
 
-    private void onDisconnected(long currentGeneration, String reason, Throwable cause) {
+    private synchronized void onDisconnected(long currentGeneration, String reason, Throwable cause) {
         if (!isCurrent(currentGeneration)) {
             return;
         }
+        // Retire the listener generation before releasing the session monitor.
+        // Packet callbacks queued by the old transport can no longer rewrite
+        // state or authentication data while a reconnect is waiting/starting.
+        long reconnectGeneration = generation.incrementAndGet();
+        reconnectStability.invalidate();
         connectedAt = null;
         disconnects.incrementAndGet();
         lastDisconnectAt = Instant.now();
@@ -1193,7 +1223,7 @@ public final class BotSession implements BehaviorTarget {
             state.set(BotState.STOPPED);
         }
         else {
-            scheduleReconnect(currentGeneration);
+            scheduleReconnect(reconnectGeneration);
         }
     }
 
@@ -1222,7 +1252,8 @@ public final class BotSession implements BehaviorTarget {
         }
         nextConnectionAttempt = new ConnectionAttemptSnapshot(
             Instant.now().plusMillis(delay), ActivationKind.RECONNECT);
-        reconnectTask = executor.schedule(this::connectIfNeeded, delay, TimeUnit.MILLISECONDS);
+        long attemptEpoch = ++connectionAttemptEpoch;
+        reconnectTask = executor.schedule(() -> connectIfNeeded(attemptEpoch), delay, TimeUnit.MILLISECONDS);
     }
 
     private synchronized void scheduleConnection(long minimumDelayMillis, ActivationKind kind) {
@@ -1241,15 +1272,21 @@ public final class BotSession implements BehaviorTarget {
             state.set(BotState.RECONNECT_WAIT);
         }
         nextConnectionAttempt = new ConnectionAttemptSnapshot(Instant.now().plusMillis(delay), kind);
-        reconnectTask = executor.schedule(this::connectIfNeeded, delay, TimeUnit.MILLISECONDS);
+        long attemptEpoch = ++connectionAttemptEpoch;
+        reconnectTask = executor.schedule(() -> connectIfNeeded(attemptEpoch), delay, TimeUnit.MILLISECONDS);
     }
 
     private synchronized void cancelReconnect() {
+        connectionAttemptEpoch++;
         if (reconnectTask != null) {
             reconnectTask.cancel(false);
             reconnectTask = null;
         }
         nextConnectionAttempt = null;
+    }
+
+    private boolean isConnectionAttemptCurrentLocked(long attemptEpoch, long currentGeneration) {
+        return attemptEpoch == connectionAttemptEpoch && isCurrent(currentGeneration);
     }
 
     private synchronized void cancelServerSwitch() {
@@ -1279,6 +1316,13 @@ public final class BotSession implements BehaviorTarget {
 
     private boolean isCurrent(long currentGeneration) {
         return generation.get() == currentGeneration;
+    }
+
+    private synchronized void resetReconnectAttemptsIfStable(long currentGeneration) {
+        if (isCurrent(currentGeneration) && !manualStop.get() && !maintenanceBlocked.getAsBoolean()
+            && isPlayable(currentGeneration) && isAuthenticationComplete()) {
+            reconnectAttempts.set(0);
+        }
     }
 
     private static String normalizeCommand(String command) {

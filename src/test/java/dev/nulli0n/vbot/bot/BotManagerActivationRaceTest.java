@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BotManagerActivationRaceTest {
     @Test
@@ -103,6 +104,32 @@ class BotManagerActivationRaceTest {
         manager.close();
 
         assertThat(Duration.ofNanos(System.nanoTime() - startedAt)).isLessThan(Duration.ofSeconds(1));
+    }
+
+    @Test
+    void closedManagerRejectsCreateWithoutRetainingTheSession() {
+        BotManager manager = manager((ignoredId, ignoredComplete) -> { });
+        BotPluginConfig.BotDefinition definition = new BotPluginConfig.BotDefinition(
+            "Dynamic01", true, "AFK_Dynamic01", "", "lobby", "", 2,
+            config().bots().get("farm01").auth(), "server {server}", 1_000, 0, List.of());
+        manager.close();
+
+        assertThatThrownBy(() -> manager.create(definition))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("not accepting");
+        assertThat(manager.find("Dynamic01")).isEmpty();
+    }
+
+    @Test
+    void createEnforcesCaseInsensitiveUsernameUniquenessInsideManagerLock() {
+        try (BotManager manager = manager((ignoredId, ignoredComplete) -> { })) {
+            BotPluginConfig.BotDefinition duplicateUsername = new BotPluginConfig.BotDefinition(
+                "Dynamic02", true, "afk_farm01", "", "lobby", "", 2,
+                config().bots().get("farm01").auth(), "server {server}", 1_000, 0, List.of());
+
+            assertThat(manager.create(duplicateUsername)).isEqualTo(BotManager.CreateResult.ALREADY_EXISTS);
+            assertThat(manager.find("Dynamic02")).isEmpty();
+        }
     }
 
     private static BotManager manager(DispatchBarrier barrier) {

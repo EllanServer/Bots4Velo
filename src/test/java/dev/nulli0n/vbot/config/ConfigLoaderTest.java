@@ -32,6 +32,7 @@ class ConfigLoaderTest {
         assertThat(config.bots().get("farm01").serverSwitchMaximumAttempts()).isZero();
         assertThat(config.bots().get("farm01").protocolDetectionServer()).isBlank();
         assertThat(config.runtime().maximumBots()).isEqualTo(32);
+        assertThat(config.runtime().reconnect().stableResetSeconds()).isEqualTo(30);
         assertThat(config.runtime().prometheusPort()).isZero();
         assertThat(config.runtime().backendControl()).isEqualTo(
             BotPluginConfig.BackendControlConfig.disabled());
@@ -238,6 +239,49 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void parsesReconnectStabilityAndValidatesItsRange() {
+        BotPluginConfig disabled = parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: 0
+            bots: {}
+            """);
+        BotPluginConfig maximum = parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: 86400
+            bots: {}
+            """);
+
+        assertThat(disabled.runtime().reconnect().stableResetSeconds()).isZero();
+        assertThat(maximum.runtime().reconnect().stableResetSeconds()).isEqualTo(86_400);
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: 86401
+            bots: {}
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("stable-reset-seconds");
+        assertThatThrownBy(() -> parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: -1
+            bots: {}
+            """))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("stable-reset-seconds");
+    }
+
+    @Test
+    void keepsLegacyReconnectConstructorSourceCompatible() {
+        BotPluginConfig.ReconnectConfig reconnect = new BotPluginConfig.ReconnectConfig(
+            1_000L, 60_000L, 2.0D, 0.15D, 0);
+
+        assertThat(reconnect.stableResetSeconds()).isEqualTo(30);
+    }
+
+    @Test
     void acceptsManualProtocolVersion() {
         BotPluginConfig config = parse("""
             proxy:
@@ -374,6 +418,57 @@ class ConfigLoaderTest {
         assertThat(bot.auth().registrationSecondArgument())
             .isEqualTo(BotPluginConfig.RegistrationSecondArgument.EMAIL_OPTIONAL);
         assertThat(bot.auth().uiDetectionGraceMillis()).isEqualTo(4_200L);
+    }
+
+    @Test
+    void loadsLegacySecretAliasesThatPredateManagedCreateValidation(@TempDir Path directory) throws IOException {
+        String longAlias = "legacy-" + "x".repeat(80);
+        Files.writeString(directory.resolve("config.yml"), """
+            bots:
+              Slash:
+                enabled: true
+                username: AFK_Slash
+                password-secret: "farm/one"
+              Colon:
+                enabled: true
+                username: AFK_Colon
+                password-secret: "team:bot"
+              Unicode:
+                enabled: true
+                username: AFK_Unicode
+                password-secret: "机器人"
+              Long:
+                enabled: true
+                username: AFK_Long
+                password-secret: "%s"
+            """.formatted(longAlias));
+        Files.writeString(directory.resolve("secrets.yml"), """
+            passwords:
+              "farm/one": slash-value
+              "team:bot": colon-value
+              "机器人": unicode-value
+              "%s": long-value
+            """.formatted(longAlias));
+
+        BotPluginConfig config = ConfigLoader.load(directory, Map.of());
+
+        assertThat(config.bots().get("slash").password()).isEqualTo("slash-value");
+        assertThat(config.bots().get("colon").password()).isEqualTo("colon-value");
+        assertThat(config.bots().get("unicode").password()).isEqualTo("unicode-value");
+        assertThat(config.bots().get("long").password()).isEqualTo("long-value");
+    }
+
+    @Test
+    void loadsLegacyEnvironmentReferenceWithoutApplyingCreateTokenRegex() {
+        BotPluginConfig config = parse("""
+            bots:
+              LegacyEnv:
+                enabled: true
+                username: AFK_LegacyEnv
+                password-env: "LEGACY-ENV/ONE"
+            """, Map.of("LEGACY-ENV/ONE", "environment-value"));
+
+        assertThat(config.bots().get("legacyenv").password()).isEqualTo("environment-value");
     }
 
     @Test

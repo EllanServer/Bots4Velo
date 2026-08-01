@@ -155,6 +155,28 @@ class ConfigChangePreviewTest {
     }
 
     @Test
+    void reportsReconnectStabilityChanges() {
+        BotPluginConfig current = parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: 30
+            bots: {}
+            """);
+        BotPluginConfig candidate = parse("""
+            runtime:
+              reconnect:
+                stable-reset-seconds: 90
+            bots: {}
+            """);
+
+        ConfigChangePreview.Change change = ConfigChangePreview.compare(current, candidate)
+            .changes().getFirst();
+
+        assertThat(change.type()).isEqualTo(RUNTIME_CHANGED);
+        assertThat(change.fields()).containsExactly("reconnect.stable-reset-seconds");
+    }
+
+    @Test
     void neverLeaksCredentialsEnvironmentValuesUrlsOrCommandContents() {
         String currentPassword = "old-bot-password-9713";
         String candidatePassword = "new-bot-password-8426";

@@ -39,12 +39,12 @@ class HelpRendererTest {
         assertThat(HelpRenderer.PAGE_COUNT).isEqualTo(5);
         assertThat(HelpRenderer.entries(1)).hasSize(6);
         assertThat(HelpRenderer.entries(2)).hasSize(7);
-        assertThat(HelpRenderer.entries(3)).hasSize(5);
+        assertThat(HelpRenderer.entries(3)).hasSize(6);
         assertThat(HelpRenderer.entries(4)).hasSize(5);
         assertThat(HelpRenderer.entries(5)).hasSize(7);
         assertThat(HelpRenderer.entries(0)).isEmpty();
         assertThat(HelpRenderer.entries(6)).isEmpty();
-        assertThat(entries).hasSize(30);
+        assertThat(entries).hasSize(31);
         assertThat(entries).extracting(HelpRenderer.HelpEntry::syntax).doesNotHaveDuplicates();
         assertThat(entries).extracting(HelpRenderer.HelpEntry::descriptionKey).doesNotHaveDuplicates();
         assertThat(entries).allSatisfy(entry ->
@@ -97,6 +97,25 @@ class HelpRendererTest {
         List<Component> empty = HelpRenderer.render(messages, 3, ignored -> false);
         assertThat(commandLines(empty)).isEmpty();
         assertThat(visibleText(empty)).contains("No commands on this test page.");
+    }
+
+    @Test
+    void behaviorHelpSeparatesViewStatusFromControlMutations() throws Exception {
+        PluginMessages messages = englishMessages();
+
+        String viewOnly = visibleText(HelpRenderer.render(messages, 3,
+            Set.of("bots4velo.view")::contains));
+        assertThat(viewOnly)
+            .contains("/vbot behavior <selector> status")
+            .doesNotContain("/vbot behavior <selector> <start|pause>")
+            .doesNotContain("/vbot behavior <selector> <follow|unfollow> [player]");
+
+        String controlOnly = visibleText(HelpRenderer.render(messages, 3,
+            Set.of("bots4velo.control")::contains));
+        assertThat(controlOnly)
+            .doesNotContain("/vbot behavior <selector> status")
+            .contains("/vbot behavior <selector> <start|pause>")
+            .contains("/vbot behavior <selector> <follow|unfollow> [player]");
     }
 
     @Test
@@ -239,6 +258,9 @@ class HelpRendererTest {
     private static String[] invocationArguments(HelpRenderer.HelpEntry entry) {
         if (entry.descriptionKey().equals("help-afk-status")) {
             return new String[]{"afk", "all", "status"};
+        }
+        if (entry.syntax().equals("/vbot behavior <selector> status")) {
+            return new String[]{"behavior", "all", "status"};
         }
         List<String> tokens = new ArrayList<>(Arrays.asList(entry.suggestion().trim().split("\\s+")));
         assertThat(tokens).as(entry.syntax()).hasSizeGreaterThanOrEqualTo(2);

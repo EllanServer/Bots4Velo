@@ -33,6 +33,7 @@ import dev.nulli0n.vbot.command.VBotCommand;
 import dev.nulli0n.vbot.config.BotPluginConfig;
 import dev.nulli0n.vbot.config.ConfigLoader;
 import dev.nulli0n.vbot.config.ConfigChangePreview;
+import dev.nulli0n.vbot.config.ManagedCredentialReference;
 import dev.nulli0n.vbot.config.ManagedBotStore;
 import dev.nulli0n.vbot.message.PluginMessages;
 import dev.nulli0n.vbot.observe.PrometheusExporter;
@@ -152,8 +153,17 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
                 bestEffort("bot manager", active::close);
             }
             unregisterBackendControlChannel();
-            logger.error("bots4velo initialization failed", exception);
+            // SnakeYAML marked exceptions can embed the complete offending
+            // source line, including an inline password. Startup therefore
+            // records only a diagnostic type, never the message/throwable.
+            logger.error(initializationFailureDiagnostic(exception));
         }
+    }
+
+    static String initializationFailureDiagnostic(Throwable failure) {
+        String type = failure == null ? "UnknownFailure" : failure.getClass().getSimpleName();
+        return "bots4velo initialization failed (" + type
+            + "); exception details were hidden to protect configuration secrets";
     }
 
     private void registerCommand() {
@@ -382,31 +392,60 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         return ConfigLoader.load(dataDirectory, store.definitions());
     }
 
-    public synchronized ManagedCreateResult createManagedBot(String id, String username, String password,
+    public synchronized ManagedCreateResult createManagedBot(String id, String username,
+                                                               ManagedCredentialReference credential,
                                                                String targetServer) throws IOException {
         BotManager active = manager();
-        if (active.find(id).isPresent()) {
+        ManagedBotStore store = managedBotStore;
+        BotPluginConfig.BotDefinition requested = ManagedBotStore.createDefinition(
+            id, username, credential, targetServer);
+        if (active.find(requested.id()).isPresent()) {
             return ManagedCreateResult.ALREADY_EXISTS;
         }
         if (active.sessions().stream().anyMatch(session ->
-            session.definition().username().equalsIgnoreCase(username))) {
+            session.definition().username().equalsIgnoreCase(requested.username()))) {
             return ManagedCreateResult.ALREADY_EXISTS;
         }
         if (active.snapshots().size() >= active.maximumBots()) {
             return ManagedCreateResult.LIMIT_REACHED;
         }
 
-        BotPluginConfig.BotDefinition definition = ManagedBotStore.createDefinition(
-            id, username, password, targetServer);
-        ManagedBotStore store = managedBotStore;
-        store.add(definition);
-        BotManager.CreateResult result = active.create(definition);
+        BotPluginConfig.BotDefinition definition = store.add(requested, credential);
+        BotManager.CreateResult result;
+        try {
+            result = active.create(definition);
+        }
+        catch (RuntimeException | Error failure) {
+            try {
+                store.remove(definition.id());
+            }
+            catch (Exception rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+            throw failure;
+        }
         if (result != BotManager.CreateResult.CREATED) {
             store.remove(definition.id());
             return result == BotManager.CreateResult.LIMIT_REACHED
                 ? ManagedCreateResult.LIMIT_REACHED : ManagedCreateResult.ALREADY_EXISTS;
         }
         return ManagedCreateResult.CREATED;
+    }
+
+    /**
+     * Source-compatible v2.x entry point. Every non-empty string is treated as
+     * a legacy inline password and rejected without inspecting its contents;
+     * credential references must use the typed overload.
+     */
+    @Deprecated
+    public synchronized ManagedCreateResult createManagedBot(String id, String username,
+                                                               String credentialToken,
+                                                               String targetServer) throws IOException {
+        if (credentialToken != null && !credentialToken.isBlank()) {
+            throw new IllegalArgumentException(
+                "Inline passwords are no longer accepted; use a credential reference");
+        }
+        return createManagedBot(id, username, ManagedCredentialReference.none(), targetServer);
     }
 
     public synchronized ManagedRemoveResult removeManagedBot(String id) throws IOException {
@@ -416,12 +455,15 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             return active.find(id).isPresent()
                 ? ManagedRemoveResult.STATIC_BOT : ManagedRemoveResult.NOT_FOUND;
         }
-        store.remove(id);
-        stopFollowing(id);
-        active.remove(id);
+        BotPluginConfig.BotDefinition definition = store.definitions().get(
+            id == null ? "" : id.trim().toLowerCase(java.util.Locale.ROOT));
+        String canonicalId = definition == null ? id : definition.id();
+        store.remove(canonicalId);
+        active.remove(canonicalId);
+        bestEffort("managed bot follow state", () -> stopFollowing(canonicalId));
         VelocityBackendControlService control = backendControlClient;
         if (control != null) {
-            control.removeBot(id);
+            bestEffort("managed bot backend state", () -> control.removeBot(canonicalId));
         }
         return ManagedRemoveResult.REMOVED;
     }
@@ -556,6 +598,18 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     public List<String> serverNames() {
         return proxy.getAllServers().stream()
             .map(server -> server.getServerInfo().getName())
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    /** Returns only IDs that can be removed through {@code /vbot remove}. */
+    public List<String> managedBotIds() {
+        ManagedBotStore store = managedBotStore;
+        if (store == null) {
+            return List.of();
+        }
+        return store.definitions().values().stream()
+            .map(BotPluginConfig.BotDefinition::id)
             .sorted(String.CASE_INSENSITIVE_ORDER)
             .toList();
     }

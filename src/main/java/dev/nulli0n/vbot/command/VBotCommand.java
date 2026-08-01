@@ -9,6 +9,7 @@ import dev.nulli0n.vbot.Bots4VeloPlugin;
 import dev.nulli0n.vbot.Bots4VeloPlugin.BotServerSwitchResult;
 import dev.nulli0n.vbot.backend.BackendControlService;
 import dev.nulli0n.vbot.bot.BotSnapshot;
+import dev.nulli0n.vbot.config.ManagedCredentialReference;
 import dev.nulli0n.vbot.message.PluginMessages;
 import dev.nulli0n.vbot.transport.BotPosition;
 import net.kyori.adventure.text.Component;
@@ -19,13 +20,17 @@ import net.kyori.adventure.text.format.TextDecoration;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 public final class VBotCommand implements SimpleCommand {
     private static final String ADMIN_PERMISSION = "bots4velo.admin";
@@ -38,10 +43,16 @@ public final class VBotCommand implements SimpleCommand {
         "help", "list", "queue", "status", "monitor", "history", "doctor", "servers", "server", "movehere",
         "position", "move", "look", "behavior", "afk", "recover", "invulnerable", "gamemode", "spawnpoint", "respawn",
         "create", "remove", "start", "stop", "reconnect", "hold", "resume", "command", "language", "lang", "reload");
-    private static final List<String> BOT_ID_ACTIONS = List.of(
-        "status", "monitor", "history", "server", "movehere", "position", "move", "look", "remove",
-        "start", "stop", "reconnect", "hold", "resume", "command", "behavior", "invulnerable", "gamemode", "spawnpoint",
-        "respawn", "afk", "recover");
+    private static final Set<String> EXACT_ID_ACTIONS = Set.of(
+        "status", "monitor", "history", "position", "move", "look");
+    private static final Set<String> SELECTOR_ACTIONS = Set.of(
+        "doctor", "server", "movehere", "start", "stop", "reconnect", "hold", "resume", "command", "behavior",
+        "invulnerable", "gamemode", "spawnpoint", "respawn", "afk", "recover");
+    private static final List<String> QUERY_OPTIONS = List.of("--state", "--server", "--failed", "--page");
+    private static final List<String> BOT_STATES = List.of(
+        "stopped", "connecting", "login", "configuration", "play", "reconnect_wait", "stopping", "failed");
+    private static final List<String> ROOT_PERMISSIONS = List.of(
+        VIEW_PERMISSION, CONTROL_PERMISSION, CREATE_PERMISSION, RELOAD_PERMISSION, ADMIN_PERMISSION);
 
     private final Bots4VeloPlugin plugin;
     private final PlayerStateCommandHandler playerStateCommands;
@@ -67,7 +78,7 @@ public final class VBotCommand implements SimpleCommand {
         CommandSource source = invocation.source();
         String[] args = invocation.arguments();
         if (args.length == 0) {
-            if (!canUse(source, VIEW_PERMISSION)) {
+            if (!canAccessRoot(source::hasPermission)) {
                 source.sendMessage(CommandUi.feedback(plugin.messages(), NamedTextColor.RED, "no-permission",
                     "You do not have permission for /vbot %s.", "help"));
                 return;
@@ -275,6 +286,12 @@ public final class VBotCommand implements SimpleCommand {
                 snapshot.resourcePacksLoaded(),
                 snapshot.authenticationUiPresentations(), snapshot.authenticationUiSubmissions(),
                 snapshot.authenticationUi()), color));
+            if (plugin.managedBotIds().stream().anyMatch(definition.id()::equalsIgnoreCase)
+                && definition.credentialSourceFingerprint().equals("inline")) {
+                feedback(source, NamedTextColor.YELLOW, "doctor-managed-inline-v30",
+                    "%s: legacy inline password detected in managed-bots.yml; migrate it to password-secret or password-env.",
+                    definition.id());
+            }
             if (plugin.backendControlEnabled()) {
                 plugin.backendControl().probe(definition.id()).whenComplete((result, failure) -> {
                     if (failure != null || result == null) {
@@ -551,19 +568,37 @@ public final class VBotCommand implements SimpleCommand {
 
     private void create(CommandSource source, String[] args) throws Exception {
         if (args.length < 4 || args.length > 5) {
-            feedback(source, NamedTextColor.YELLOW, "usage-create",
-                "Usage: /vbot create <id> <username> <password|-> [target-server|-]");
+            feedback(source, NamedTextColor.YELLOW, "usage-create-v30",
+                "Usage: /vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]");
             return;
         }
-        String password = args[3].equals("-") ? "" : args[3];
+        ManagedCredentialReference credential;
+        try {
+            credential = parseManagedCredentialToken(args[3]);
+        }
+        catch (IllegalArgumentException exception) {
+            feedback(source, NamedTextColor.RED, "input-managed-credential-v30",
+                "Inline passwords are not accepted. Use secret:<name>, env:<NAME> or - for no authentication.");
+            return;
+        }
         String targetServer = args.length == 5 && !args[4].equals("-") ? args[4] : "";
-        switch (plugin.createManagedBot(args[1], args[2], password, targetServer)) {
-            case CREATED -> feedback(source, NamedTextColor.GREEN, "create-success",
-                "Bot saved and queued under the startup rate limit: %s", args[1]);
-            case ALREADY_EXISTS -> feedback(source, NamedTextColor.RED, "create-exists",
-                "Bot ID already exists: %s", args[1]);
-            case LIMIT_REACHED -> feedback(source, NamedTextColor.RED, "create-limit",
-                "The runtime.maximum-bots limit has been reached.");
+        try {
+            switch (plugin.createManagedBot(args[1], args[2], credential, targetServer)) {
+                case CREATED -> feedback(source, NamedTextColor.GREEN, "create-success",
+                    "Bot saved and queued under the startup rate limit: %s", args[1]);
+                case ALREADY_EXISTS -> feedback(source, NamedTextColor.RED, "create-exists",
+                    "Bot ID already exists: %s", args[1]);
+                case LIMIT_REACHED -> feedback(source, NamedTextColor.RED, "create-limit",
+                    "The runtime.maximum-bots limit has been reached.");
+            }
+        }
+        catch (Exception exception) {
+            // A YAML parser failure can quote the entire secret-bearing line.
+            // Keep both chat and the normal proxy log limited to the type.
+            plugin.logger().warn("/vbot create failed ({})",
+                ConfigValidationFailure.diagnosticType(exception));
+            feedback(source, NamedTextColor.RED, "create-failed-v30",
+                "Managed bot creation failed; check the ID, username, credential reference, target server and secret/environment configuration.");
         }
     }
 
@@ -788,6 +823,9 @@ public final class VBotCommand implements SimpleCommand {
     }
 
     private boolean hasPermission(CommandSource source, String action, String[] args) {
+        if (action.equals("help")) {
+            return canAccessRoot(source::hasPermission);
+        }
         if (source.hasPermission(ADMIN_PERMISSION)) {
             return true;
         }
@@ -798,8 +836,11 @@ public final class VBotCommand implements SimpleCommand {
         if ((action.equals("language") || action.equals("lang")) && args.length <= 1) {
             return VIEW_PERMISSION;
         }
-        return action.equals("afk") && args.length >= 3 && args[2].equalsIgnoreCase("status")
-            ? VIEW_PERMISSION : permissionFor(action);
+        if ((action.equals("afk") || action.equals("behavior"))
+            && args.length >= 3 && args[2].equalsIgnoreCase("status")) {
+            return VIEW_PERMISSION;
+        }
+        return permissionFor(action);
     }
 
     static String permissionFor(String action) {
@@ -983,15 +1024,15 @@ public final class VBotCommand implements SimpleCommand {
         if (!canSuggestArguments(invocation.source(), args)) {
             return List.of();
         }
-        if (args.length == 2 && BOT_ID_ACTIONS.contains(args[0].toLowerCase(Locale.ROOT))) {
-            String prefix = args[1].toLowerCase(Locale.ROOT);
-            return selectorSuggestions().stream()
-                .filter(id -> id.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
+        if (args.length == 2 && hasTargetArgument(args[0])) {
+            return targetSuggestions(args[0], args[1],
+                plugin.manager().snapshots().stream().map(BotSnapshot::id).toList(),
+                plugin.managedBotIds(), selectorSuggestions());
         }
         if (args.length == 2 && (args[0].equalsIgnoreCase("list") || args[0].equalsIgnoreCase("queue"))) {
             String prefix = args[1].toLowerCase(Locale.ROOT);
-            List<String> values = new java.util.ArrayList<>(selectorSuggestions());
-            values.addAll(List.of("--state", "--server", "--failed", "--page"));
+            List<String> values = new ArrayList<>(selectorSuggestions());
+            values.addAll(querySuggestions(args, plugin.serverNames()));
             return values.stream().filter(value -> value.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("help")) {
@@ -1002,20 +1043,7 @@ public final class VBotCommand implements SimpleCommand {
             return matching(args[1], "--check");
         }
         if ((args[0].equalsIgnoreCase("list") || args[0].equalsIgnoreCase("queue")) && args.length >= 3) {
-            String previous = args[args.length - 2];
-            if (previous.equalsIgnoreCase("--state")) {
-                return matching(args[args.length - 1], "stopped", "connecting", "login", "configuration",
-                    "play", "reconnect_wait", "stopping", "failed");
-            }
-            if (previous.equalsIgnoreCase("--server")) {
-                String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
-                return plugin.serverNames().stream()
-                    .filter(server -> server.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
-            }
-            if (previous.equalsIgnoreCase("--page")) {
-                return matching(args[args.length - 1], "1", "2", "3");
-            }
-            return matching(args[args.length - 1], "--state", "--server", "--failed", "--page");
+            return querySuggestions(args, plugin.serverNames());
         }
         if (args[0].equalsIgnoreCase("hold") && args.length >= 3) {
             if (args[args.length - 2].equalsIgnoreCase("--ttl")) {
@@ -1037,14 +1065,23 @@ public final class VBotCommand implements SimpleCommand {
             return plugin.serverNames().stream()
                 .filter(server -> server.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
         }
+        if (args.length == 4 && args[0].equalsIgnoreCase("create")) {
+            return matching(args[3], "secret:", "env:", "-");
+        }
         if (args.length == 5 && args[0].equalsIgnoreCase("create")) {
             String prefix = args[4].toLowerCase(Locale.ROOT);
             return plugin.serverNames().stream()
                 .filter(server -> server.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("behavior")) {
-            return List.of("start", "pause", "status", "follow", "unfollow").stream()
-                .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
+            return behaviorActionSuggestions(args[2],
+                canUse(invocation.source(), VIEW_PERMISSION),
+                canUse(invocation.source(), CONTROL_PERMISSION));
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("behavior")
+            && args[2].equalsIgnoreCase("follow")) {
+            return playerNameSuggestions(args[3], plugin.proxy().getAllPlayers().stream()
+                .map(Player::getUsername).toList());
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("invulnerable")) {
             return matching(args[2], "on", "off", "keep");
@@ -1085,7 +1122,7 @@ public final class VBotCommand implements SimpleCommand {
     }
 
     static List<String> afkActionSuggestions(String prefix, boolean canView, boolean canControl) {
-        List<String> values = new java.util.ArrayList<>();
+        List<String> values = new ArrayList<>();
         if (canView) {
             values.add("status");
         }
@@ -1096,12 +1133,31 @@ public final class VBotCommand implements SimpleCommand {
         return values.stream().filter(value -> value.startsWith(normalized)).toList();
     }
 
+    static List<String> behaviorActionSuggestions(String prefix, boolean canView, boolean canControl) {
+        List<String> values = new ArrayList<>();
+        if (canView) {
+            values.add("status");
+        }
+        if (canControl) {
+            values.addAll(List.of("start", "pause", "follow", "unfollow"));
+        }
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return values.stream().filter(value -> value.startsWith(normalized)).toList();
+    }
+
+    static boolean canAccessRoot(Predicate<String> permissionCheck) {
+        return ROOT_PERMISSIONS.stream().anyMatch(permissionCheck);
+    }
+
     private static boolean canUse(CommandSource source, String permission) {
         return source.hasPermission(ADMIN_PERMISSION) || source.hasPermission(permission);
     }
 
     private static boolean canSuggestAction(CommandSource source, String action) {
-        if (action.equals("afk")) {
+        if (action.equals("help")) {
+            return canAccessRoot(source::hasPermission);
+        }
+        if (action.equals("afk") || action.equals("behavior")) {
             return canUse(source, VIEW_PERMISSION) || canUse(source, CONTROL_PERMISSION);
         }
         if (action.equals("language") || action.equals("lang")) {
@@ -1115,7 +1171,10 @@ public final class VBotCommand implements SimpleCommand {
         if (!ACTIONS.contains(action)) {
             return false;
         }
-        if (action.equals("afk") && args.length <= 3) {
+        if (action.equals("help")) {
+            return canAccessRoot(source::hasPermission);
+        }
+        if ((action.equals("afk") || action.equals("behavior")) && args.length <= 3) {
             return canUse(source, VIEW_PERMISSION) || canUse(source, CONTROL_PERMISSION);
         }
         return canUse(source, permissionFor(action, args));
@@ -1124,6 +1183,104 @@ public final class VBotCommand implements SimpleCommand {
     private static List<String> matching(String prefix, String... values) {
         String normalized = prefix.toLowerCase(Locale.ROOT);
         return Arrays.stream(values).filter(value -> value.startsWith(normalized)).toList();
+    }
+
+    static List<String> targetSuggestions(String action, String prefix, List<String> botIds,
+                                          List<String> managedBotIds, List<String> selectors) {
+        String normalizedAction = action.toLowerCase(Locale.ROOT);
+        List<String> candidates;
+        if (EXACT_ID_ACTIONS.contains(normalizedAction)) {
+            candidates = botIds;
+        }
+        else if (SELECTOR_ACTIONS.contains(normalizedAction)) {
+            candidates = selectors;
+        }
+        else if (normalizedAction.equals("remove")) {
+            candidates = managedBotIds;
+        }
+        else {
+            return List.of();
+        }
+        String normalizedPrefix = prefix.toLowerCase(Locale.ROOT);
+        return candidates.stream()
+            .filter(value -> value.toLowerCase(Locale.ROOT).startsWith(normalizedPrefix))
+            .distinct()
+            .toList();
+    }
+
+    static List<String> querySuggestions(String[] arguments, List<String> serverNames) {
+        if (arguments.length < 2) {
+            return List.of();
+        }
+        String prefix = arguments[arguments.length - 1];
+        String previous = arguments.length >= 3 ? arguments[arguments.length - 2] : "";
+        if (optionRequiresValue(previous)) {
+            long occurrences = Arrays.stream(arguments, 1, arguments.length - 1)
+                .filter(previous::equalsIgnoreCase)
+                .count();
+            if (occurrences > 1) {
+                return List.of();
+            }
+            if (previous.equalsIgnoreCase("--state")) {
+                return filterPrefix(BOT_STATES, prefix);
+            }
+            if (previous.equalsIgnoreCase("--server")) {
+                return filterPrefix(serverNames, prefix);
+            }
+            return filterPrefix(List.of("1", "2", "3"), prefix);
+        }
+
+        Set<String> used = new HashSet<>();
+        for (int index = 1; index < arguments.length - 1; index++) {
+            String token = arguments[index].toLowerCase(Locale.ROOT);
+            if (QUERY_OPTIONS.contains(token)) {
+                used.add(token);
+            }
+        }
+        return QUERY_OPTIONS.stream()
+            .filter(option -> !used.contains(option))
+            .filter(option -> option.startsWith(prefix.toLowerCase(Locale.ROOT)))
+            .toList();
+    }
+
+    static List<String> playerNameSuggestions(String prefix, List<String> playerNames) {
+        return playerNames.stream()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix.toLowerCase(Locale.ROOT)))
+            .distinct()
+            .toList();
+    }
+
+    private static boolean hasTargetArgument(String action) {
+        String normalized = action.toLowerCase(Locale.ROOT);
+        return EXACT_ID_ACTIONS.contains(normalized) || SELECTOR_ACTIONS.contains(normalized)
+            || normalized.equals("remove");
+    }
+
+    private static boolean optionRequiresValue(String option) {
+        return option.equalsIgnoreCase("--state") || option.equalsIgnoreCase("--server")
+            || option.equalsIgnoreCase("--page");
+    }
+
+    private static List<String> filterPrefix(List<String> values, String prefix) {
+        String normalized = prefix.toLowerCase(Locale.ROOT);
+        return values.stream().filter(value -> value.toLowerCase(Locale.ROOT).startsWith(normalized)).toList();
+    }
+
+    static ManagedCredentialReference parseManagedCredentialToken(String token) {
+        String normalized = token == null ? "" : token.trim();
+        if (normalized.equals("-")) {
+            return ManagedCredentialReference.none();
+        }
+        if (normalized.regionMatches(true, 0, "secret:", 0, "secret:".length())) {
+            return ManagedCredentialReference.secret(normalized.substring("secret:".length()));
+        }
+        if (normalized.regionMatches(true, 0, "env:", 0, "env:".length())) {
+            return ManagedCredentialReference.environment(normalized.substring("env:".length()));
+        }
+        // The exception is deliberately constant: a token may itself be a
+        // password and must never be reflected into chat or logs.
+        throw new IllegalArgumentException("Invalid managed credential reference");
     }
 
     private List<String> selectorSuggestions() {

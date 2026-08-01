@@ -1,8 +1,13 @@
 package dev.nulli0n.vbot.command;
 
+import dev.nulli0n.vbot.config.ManagedCredentialReference;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class VBotCommandTest {
     @Test
@@ -28,15 +33,16 @@ class VBotCommandTest {
             );
         assertThat(VBotCommand.helpLines(3))
             .containsExactly(
-                "/vbot behavior <selector> <action> - Start, pause or inspect behavior",
-                "/vbot behavior <selector> follow <player> - Follow or unfollow a player",
+                "/vbot behavior <selector> status - Inspect behavior status",
+                "/vbot behavior <selector> <start|pause> - Start or pause behavior",
+                "/vbot behavior <selector> <follow|unfollow> [player] - Follow or unfollow a player",
                 "/vbot position <id> - Show the protocol position",
                 "/vbot move <id> <x> <y> <z> - Move a bot",
                 "/vbot look <id> <yaw> <pitch> - Rotate a bot"
             );
         assertThat(VBotCommand.helpLines(4))
             .containsExactly(
-                "/vbot create <id> <name> ... - Create a persistent bot",
+                "/vbot create <id> <name> <credential> [server] - Create a persistent bot from a secret or environment reference",
                 "/vbot remove <id> - Remove a managed bot",
                 "/vbot reload [--check] - Preview or safely reload configuration",
                 "/vbot language - Show the current UI language",
@@ -80,6 +86,26 @@ class VBotCommandTest {
     }
 
     @Test
+    void behaviorStatusUsesViewWhileMutationsUseControl() {
+        assertThat(VBotCommand.permissionFor("behavior", new String[]{"behavior", "all", "status"}))
+            .isEqualTo("bots4velo.view");
+        for (String action : List.of("start", "pause", "follow", "unfollow")) {
+            assertThat(VBotCommand.permissionFor("behavior", new String[]{"behavior", "all", action}))
+                .as(action)
+                .isEqualTo("bots4velo.control");
+        }
+    }
+
+    @Test
+    void commandRootIsAvailableToEveryDefinedRoleButNotToUnprivilegedSources() {
+        for (String permission : List.of("bots4velo.view", "bots4velo.control", "bots4velo.create",
+            "bots4velo.reload", "bots4velo.admin")) {
+            assertThat(VBotCommand.canAccessRoot(Set.of(permission)::contains)).as(permission).isTrue();
+        }
+        assertThat(VBotCommand.canAccessRoot(ignored -> false)).isFalse();
+    }
+
+    @Test
     void afkSuggestionsSeparateViewAndControlActions() {
         assertThat(VBotCommand.afkActionSuggestions("", true, false))
             .containsExactly("status");
@@ -90,5 +116,93 @@ class VBotCommandTest {
         assertThat(VBotCommand.afkActionSuggestions("p", true, true))
             .containsExactly("preset");
         assertThat(VBotCommand.afkActionSuggestions("", false, false)).isEmpty();
+    }
+
+    @Test
+    void behaviorSuggestionsSeparateViewAndControlActions() {
+        assertThat(VBotCommand.behaviorActionSuggestions("", true, false))
+            .containsExactly("status");
+        assertThat(VBotCommand.behaviorActionSuggestions("", false, true))
+            .containsExactly("start", "pause", "follow", "unfollow");
+        assertThat(VBotCommand.behaviorActionSuggestions("", true, true))
+            .containsExactly("status", "start", "pause", "follow", "unfollow");
+        assertThat(VBotCommand.behaviorActionSuggestions("f", true, true))
+            .containsExactly("follow");
+        assertThat(VBotCommand.behaviorActionSuggestions("", false, false)).isEmpty();
+    }
+
+    @Test
+    void targetSuggestionsDistinguishExactIdsSelectorsAndManagedIds() {
+        List<String> botIds = List.of("IronFarm", "LobbyBot", "StaticBot");
+        List<String> managedIds = List.of("IronFarm", "LobbyBot");
+        List<String> selectors = List.of("all", "IronFarm", "LobbyBot", "StaticBot",
+            "@group:farm", "@tag:backup", "@server:lobby");
+
+        for (String action : List.of("status", "monitor", "history", "position", "move", "look")) {
+            assertThat(VBotCommand.targetSuggestions(action, "", botIds, managedIds, selectors))
+                .as(action)
+                .containsExactlyElementsOf(botIds)
+                .noneMatch(value -> value.equals("all") || value.startsWith("@"));
+        }
+        for (String action : List.of("doctor", "server", "movehere", "start", "stop", "reconnect",
+            "hold", "resume", "command", "behavior", "invulnerable", "gamemode", "spawnpoint",
+            "respawn", "afk", "recover")) {
+            assertThat(VBotCommand.targetSuggestions(action, "@", botIds, managedIds, selectors))
+                .as(action)
+                .containsExactly("@group:farm", "@tag:backup", "@server:lobby");
+        }
+        assertThat(VBotCommand.targetSuggestions("remove", "", botIds, managedIds, selectors))
+            .containsExactlyElementsOf(managedIds)
+            .doesNotContain("StaticBot", "all", "@group:farm");
+        assertThat(VBotCommand.targetSuggestions("create", "", botIds, managedIds, selectors)).isEmpty();
+    }
+
+    @Test
+    void querySuggestionsDoNotOfferOptionsAlreadyCommitted() {
+        List<String> servers = List.of("lobby", "survival");
+
+        assertThat(VBotCommand.querySuggestions(new String[]{"list", ""}, servers))
+            .containsExactly("--state", "--server", "--failed", "--page");
+        assertThat(VBotCommand.querySuggestions(
+            new String[]{"list", "all", "--state", "play", "--failed", ""}, servers))
+            .containsExactly("--server", "--page");
+        assertThat(VBotCommand.querySuggestions(
+            new String[]{"list", "--state", "play", "--p"}, servers))
+            .containsExactly("--page");
+        assertThat(VBotCommand.querySuggestions(
+            new String[]{"queue", "@server:lobby", "--server", "l"}, servers))
+            .containsExactly("lobby");
+        assertThat(VBotCommand.querySuggestions(
+            new String[]{"queue", "--state", "re"}, servers))
+            .containsExactly("reconnect_wait");
+        assertThat(VBotCommand.querySuggestions(
+            new String[]{"list", "--state", "play", "--state", ""}, servers)).isEmpty();
+    }
+
+    @Test
+    void followSuggestionsUseSortedCaseInsensitiveOnlinePlayerNames() {
+        assertThat(VBotCommand.playerNameSuggestions("a", List.of("Zed", "alice", "ALBERT", "Builder")))
+            .containsExactly("ALBERT", "alice");
+        assertThat(VBotCommand.playerNameSuggestions("missing", List.of("alice", "Builder"))).isEmpty();
+    }
+
+    @Test
+    void managedCreateAcceptsOnlyReferencesAndNeverReflectsAnInlineToken() {
+        assertThat(VBotCommand.parseManagedCredentialToken("-"))
+            .isEqualTo(ManagedCredentialReference.none());
+        assertThat(VBotCommand.parseManagedCredentialToken("secret:Farm01"))
+            .isEqualTo(ManagedCredentialReference.secret("Farm01"));
+        assertThat(VBotCommand.parseManagedCredentialToken("ENV:BOTS4VELO_FARM01"))
+            .isEqualTo(ManagedCredentialReference.environment("BOTS4VELO_FARM01"));
+
+        String inline = "raw-password-that-must-not-be-echoed";
+        assertThatThrownBy(() -> VBotCommand.parseManagedCredentialToken(inline))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("Invalid managed credential reference")
+            .hasMessageNotContaining(inline);
+        assertThatThrownBy(() -> VBotCommand.parseManagedCredentialToken("secret:"))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> VBotCommand.parseManagedCredentialToken("env:bad-name"))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 }

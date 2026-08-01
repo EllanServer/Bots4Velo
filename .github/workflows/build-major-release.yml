@@ -4,7 +4,7 @@ on:
   push:
     tags:
       # GitHub's glob syntax applies + to the previous character class. This
-      # matches numeric vX.0.0 tags (for example v2.0.0), but not vX.1.0 or
+      # matches numeric vX.0.0 tags (for example v3.0.0), but not vX.1.0 or
       # vX.0.1.
       - "v[0-9]+.0.0"
 
@@ -12,7 +12,11 @@ permissions:
   contents: write
 
 jobs:
+  quality-gate:
+    uses: ./.github/workflows/build.yml
+
   build-and-release:
+    needs: quality-gate
     runs-on: ubuntu-latest
 
     steps:
@@ -33,6 +37,9 @@ jobs:
 
       - name: Test and build release JAR
         run: ./gradlew clean test shadowJar -PpluginVersion="${GITHUB_REF_NAME#v}"
+
+      - name: Verify the shaded release JAR
+        run: ./gradlew verifyShadowJar -PpluginVersion="${GITHUB_REF_NAME#v}"
 
       - name: Generate artifact checksum
         run: ./gradlew writeArtifactChecksum -PpluginVersion="${GITHUB_REF_NAME#v}"

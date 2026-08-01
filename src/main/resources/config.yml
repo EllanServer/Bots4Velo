@@ -42,6 +42,10 @@ runtime:
     jitter: 0.15
     # Zero means retry forever.
     maximum-attempts: 0
+    # Reset consecutive reconnect attempts only after authentication completes
+    # and the bot remains continuously in PLAY for this many seconds. Zero
+    # resets immediately after both conditions are met.
+    stable-reset-seconds: 30
   # Repeat a start, stop, reconnect or server switch without a console task.
   schedules: []
   # Optional JSON webhook receiving lifecycle events. Empty disables it.

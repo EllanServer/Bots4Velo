@@ -16,18 +16,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class GithubWorkflowTest {
     @Test
-    void releaseDefaultsArePreparedForVersion290() throws Exception {
+    void releaseDefaultsArePreparedForVersion300() throws Exception {
         String build = Files.readString(Path.of("build.gradle.kts"));
         String verifier = Files.readString(Path.of("scripts/verify-local-integration.ps1"));
         String integration = Files.readString(Path.of("scripts/ci/run-network-integration.sh"));
         String readme = Files.readString(Path.of("README.md"));
 
-        assertThat(build).contains("orElse(\"2.9.0\")");
-        assertThat(verifier).contains("$ExpectedPluginVersion = \"2.9.0\"");
-        assertThat(integration).contains("bots4velo-integration/2.9.0");
+        assertThat(build).contains("orElse(\"3.0.0\")");
+        assertThat(build)
+            .contains("\":transport-api:check\"")
+            .contains("\":backend-protocol:check\"")
+            .contains("\":paper-companion:check\"")
+            .contains("\":adapters:legacy-1_16_5:check\"")
+            .contains("\":adapters:modern-1_21_11:check\"")
+            .contains("\":adapters:modern-26_1:check\"")
+            .contains("\":adapters:modern-26_2:check\"");
+        assertThat(verifier).contains("$ExpectedPluginVersion = \"3.0.0\"");
+        assertThat(integration).contains("bots4velo-integration/3.0.0");
         assertThat(readme)
-            .contains("bots4velo-2.9.0.jar")
-            .contains("bots4velo-paper-2.9.0.jar")
+            .contains("bots4velo-3.0.0.jar")
+            .contains("bots4velo-paper-3.0.0.jar")
+            .contains("git tag v3.0.0")
+            .contains("/vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]")
+            .contains("reconnect.stable-reset-seconds")
             .contains("/vbot list @farm --state PLAY --server survival --page 2")
             .contains("/vbot queue @server:lobby --page 1")
             .contains("/vbot hold @farm --ttl 30m")
@@ -51,7 +62,10 @@ class GithubWorkflowTest {
             .contains("permissions:\n  contents: write")
             .contains("java-version: \"21\"")
             .contains("run: chmod +x gradlew")
+            .contains("quality-gate:\n    uses: ./.github/workflows/build.yml")
+            .contains("needs: quality-gate")
             .contains("run: ./gradlew clean test shadowJar -PpluginVersion=\"${GITHUB_REF_NAME#v}\"")
+            .contains("run: ./gradlew verifyShadowJar -PpluginVersion=\"${GITHUB_REF_NAME#v}\"")
             .contains("run: ./gradlew writeArtifactChecksum -PpluginVersion=\"${GITHUB_REF_NAME#v}\"")
             .contains("path: build/libs/*")
             .contains("GH_TOKEN: ${{ github.token }}")
@@ -67,6 +81,7 @@ class GithubWorkflowTest {
         assertThat(parsed).isInstanceOf(Map.class);
         assertThat(workflow)
             .contains("pull_request:")
+            .contains("workflow_call:")
             .contains("branches:")
             .contains("java-version: \"21\"")
             .contains("run: chmod +x gradlew")

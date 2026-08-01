@@ -29,17 +29,13 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -136,7 +132,8 @@ public final class ConfigLoader {
             longValue(reconnect, "maximum-delay-ms", 60_000, 100, 3_600_000),
             doubleValue(reconnect, "multiplier", 2.0, 1.0, 10.0),
             doubleValue(reconnect, "jitter", 0.15, 0.0, 1.0),
-            integer(reconnect, "maximum-attempts", 0, 0, 1_000_000)
+            integer(reconnect, "maximum-attempts", 0, 0, 1_000_000),
+            integer(reconnect, "stable-reset-seconds", 30, 0, 86_400)
         );
         if (reconnectConfig.maximumDelayMillis() < reconnectConfig.initialDelayMillis()) {
             throw new IllegalArgumentException("reconnect.maximum-delay-ms must be >= initial-delay-ms");
@@ -174,6 +171,12 @@ public final class ConfigLoader {
     }
 
     static Map<String, BotDefinition> parseManagedBots(InputStream stream) {
+        return parseManagedBots(stream, CredentialResolver.empty(), System.getenv());
+    }
+
+    static Map<String, BotDefinition> parseManagedBots(InputStream stream,
+                                                       CredentialResolver credentials,
+                                                       Map<String, String> environment) {
         LoaderOptions options = new LoaderOptions();
         options.setAllowDuplicateKeys(false);
         Yaml yaml = new Yaml(new SafeConstructor(options));
@@ -182,7 +185,7 @@ public final class ConfigLoader {
             return Map.of();
         }
         Map<String, Object> root = castMap(loaded, "root");
-        return parseBotDefinitions(section(root, "bots"), Map.of(), CredentialResolver.empty(), System.getenv());
+        return parseBotDefinitions(section(root, "bots"), Map.of(), credentials, environment);
     }
 
     private static Map<String, BotDefinition> parseBotDefinitions(Map<String, Object> source,
@@ -218,7 +221,14 @@ public final class ConfigLoader {
             );
             String username = text(bot, "username", id);
             validateUsername(username, id);
-            ResolvedCredential credential = credentials.resolve(id, bot, environment);
+            CredentialResolver.ResolvedCredential credential = credentials.resolve(
+                id,
+                bool(bot, "enabled", false),
+                text(bot, "password", ""),
+                text(bot, "password-env", ""),
+                text(bot, "password-secret", ""),
+                environment
+            );
             String password = credential.value();
             if (bool(bot, "enabled", false) && authConfig.mode() != AuthMode.NONE && password.isBlank()) {
                 throw new IllegalArgumentException("bots." + id + ".password is required for auth mode " + authConfig.mode());
@@ -275,13 +285,14 @@ public final class ConfigLoader {
         Map<String, Object> bot = castMap(rawBot, "bots." + id);
         Map<String, Object> result = new LinkedHashMap<>();
         List<String> names = templateNames(bot.get("template"), bot.get("templates"), "bots." + id);
+        String storedTemplateSource = text(bot, "_template-source", "");
         for (String template : names) {
             mergeInto(result, resolveTemplate(template, templates, new LinkedHashSet<>()));
         }
         mergeInto(result, bot);
         result.remove("template");
         result.remove("templates");
-        result.put("_template-source", String.join(",", names));
+        result.put("_template-source", names.isEmpty() ? storedTemplateSource : String.join(",", names));
         return result;
     }
 
@@ -567,98 +578,6 @@ public final class ConfigLoader {
             ));
         }
         return List.copyOf(result);
-    }
-
-    private static final class CredentialResolver {
-        private final Map<String, String> secrets;
-
-        private CredentialResolver(Map<String, String> secrets) {
-            this.secrets = Map.copyOf(secrets);
-        }
-
-        static CredentialResolver empty() {
-            return new CredentialResolver(Map.of());
-        }
-
-        static CredentialResolver load(Path dataDirectory) throws IOException {
-            Path secretsPath = dataDirectory.resolve("secrets.yml");
-            if (Files.notExists(secretsPath)) {
-                return empty();
-            }
-            LoaderOptions options = new LoaderOptions();
-            options.setAllowDuplicateKeys(false);
-            try (InputStream stream = Files.newInputStream(secretsPath)) {
-                Object loaded = new Yaml(new SafeConstructor(options)).load(stream);
-                if (loaded == null) {
-                    return empty();
-                }
-                Map<String, Object> root = castMap(loaded, "secrets.yml root");
-                Map<String, String> values = new LinkedHashMap<>();
-                Map<String, Object> passwords = section(root, "passwords");
-                passwords.forEach((name, value) -> values.put(normalizeSecretName(name), String.valueOf(value)));
-                Map<String, Object> bots = section(root, "bots");
-                bots.forEach((name, value) -> {
-                    if (value instanceof Map<?, ?>) {
-                        String password = text(castMap(value, "secrets.yml bots." + name), "password", "");
-                        if (!password.isBlank()) {
-                            values.putIfAbsent(normalizeSecretName(name), password);
-                        }
-                    }
-                });
-                return new CredentialResolver(values);
-            }
-        }
-
-        ResolvedCredential resolve(String botId, Map<String, Object> bot,
-                                   Map<String, String> environmentValues) {
-            String inline = text(bot, "password", "");
-            String environment = text(bot, "password-env", "");
-            String secret = text(bot, "password-secret", "");
-            int sources = (inline.isBlank() ? 0 : 1) + (environment.isBlank() ? 0 : 1) + (secret.isBlank() ? 0 : 1);
-            if (sources > 1) {
-                throw new IllegalArgumentException("bots." + botId
-                    + " must define only one of password, password-env or password-secret");
-            }
-            if (!environment.isBlank()) {
-                String value = environmentValues.get(environment);
-                if (value == null || value.isBlank()) {
-                    if (!bool(bot, "enabled", false)) {
-                        return new ResolvedCredential("", credentialSource("environment", environment));
-                    }
-                    throw new IllegalArgumentException("bots." + botId + ".password-env is not set: " + environment);
-                }
-                return new ResolvedCredential(value, credentialSource("environment", environment));
-            }
-            if (!secret.isBlank()) {
-                String value = secrets.get(normalizeSecretName(secret));
-                if (value == null || value.isBlank()) {
-                    if (!bool(bot, "enabled", false)) {
-                        return new ResolvedCredential("", credentialSource("secret", normalizeSecretName(secret)));
-                    }
-                    throw new IllegalArgumentException("bots." + botId + ".password-secret was not found: " + secret);
-                }
-                return new ResolvedCredential(value, credentialSource("secret", normalizeSecretName(secret)));
-            }
-            return new ResolvedCredential(inline, inline.isBlank() ? "none" : "inline");
-        }
-
-        private static String normalizeSecretName(String value) {
-            return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-        }
-    }
-
-    private static String credentialSource(String kind, String reference) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(
-                reference.trim().getBytes(StandardCharsets.UTF_8));
-            return kind + ":" + HexFormat.of().formatHex(digest, 0, 8);
-        }
-        catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
-    }
-
-    private record ResolvedCredential(String value, String sourceFingerprint) {
     }
 
     private static void validateUsername(String username, String id) {

@@ -107,8 +107,19 @@ public record BotPluginConfig(
         long maximumDelayMillis,
         double multiplier,
         double jitter,
-        int maximumAttempts
+        int maximumAttempts,
+        int stableResetSeconds
     ) {
+        /** Source-compatible constructor using the production stability default. */
+        public ReconnectConfig(
+            long initialDelayMillis,
+            long maximumDelayMillis,
+            double multiplier,
+            double jitter,
+            int maximumAttempts
+        ) {
+            this(initialDelayMillis, maximumDelayMillis, multiplier, jitter, maximumAttempts, 30);
+        }
     }
 
     public record ScheduledAction(

@@ -38,13 +38,14 @@ final class HelpRenderer {
         entry(2, "/vbot hold <selector> [--ttl 30m] [reason]", "/vbot hold ", "help-hold", "Stop and maintenance-lock bots", CONTROL_PERMISSION),
         entry(2, "/vbot resume <selector>", "/vbot resume ", "help-resume", "Remove a maintenance lock", CONTROL_PERMISSION),
 
-        entry(3, "/vbot behavior <selector> <action>", "/vbot behavior ", "help-behavior", "Start, pause or inspect behavior", CONTROL_PERMISSION),
-        entry(3, "/vbot behavior <selector> follow <player>", "/vbot behavior ", "help-follow", "Follow or unfollow a player", CONTROL_PERMISSION),
+        entry(3, "/vbot behavior <selector> status", "/vbot behavior ", "help-behavior-status-v30", "Inspect behavior status", VIEW_PERMISSION),
+        entry(3, "/vbot behavior <selector> <start|pause>", "/vbot behavior ", "help-behavior-control-v30", "Start or pause behavior", CONTROL_PERMISSION),
+        entry(3, "/vbot behavior <selector> <follow|unfollow> [player]", "/vbot behavior ", "help-follow", "Follow or unfollow a player", CONTROL_PERMISSION),
         entry(3, "/vbot position <id>", "/vbot position ", "help-position", "Show the protocol position", VIEW_PERMISSION),
         entry(3, "/vbot move <id> <x> <y> <z>", "/vbot move ", "help-move", "Move a bot", CONTROL_PERMISSION),
         entry(3, "/vbot look <id> <yaw> <pitch>", "/vbot look ", "help-look", "Rotate a bot", CONTROL_PERMISSION),
 
-        entry(4, "/vbot create <id> <name> ...", "/vbot create ", "help-create", "Create a persistent bot", CREATE_PERMISSION),
+        entry(4, "/vbot create <id> <name> <credential> [server]", "/vbot create ", "help-create-v30", "Create a persistent bot from a secret or environment reference", CREATE_PERMISSION),
         entry(4, "/vbot remove <id>", "/vbot remove ", "help-remove", "Remove a managed bot", CREATE_PERMISSION),
         entry(4, "/vbot reload [--check]", "/vbot reload --check", "help-reload-v29", "Preview or safely reload configuration", RELOAD_PERMISSION),
         entry(4, "/vbot language", "/vbot language", "help-language-view", "Show the current UI language", VIEW_PERMISSION),
