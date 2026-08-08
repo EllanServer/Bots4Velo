@@ -55,6 +55,7 @@ repositories {
 }
 
 dependencies {
+    implementation(project(":addon-api"))
     compileOnly("com.velocitypowered:velocity-api:3.4.0")
     compileOnly("com.github.NEZNAMY:TAB-API:6.0.0")
     annotationProcessor("com.velocitypowered:velocity-api:3.4.0")
@@ -133,6 +134,7 @@ tasks.check {
     dependsOn(
         verifyShadowJar,
         ":transport-api:check",
+        ":addon-api:check",
         ":backend-protocol:check",
         ":paper-companion:check",
         ":adapters:legacy-1_16_5:check",

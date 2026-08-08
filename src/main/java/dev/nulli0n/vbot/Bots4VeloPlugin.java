@@ -24,6 +24,9 @@ import dev.nulli0n.vbot.bot.BotEvent;
 import dev.nulli0n.vbot.bot.MaintenanceHoldSnapshot;
 import dev.nulli0n.vbot.api.Bots4VeloApi;
 import dev.nulli0n.vbot.api.Bots4VeloApiProvider;
+import dev.nulli0n.vbot.addon.AddonLoader;
+import dev.nulli0n.vbot.addon.CoreAddonBotService;
+import dev.nulli0n.vbot.addon.Slf4jAddonLogger;
 import dev.nulli0n.vbot.backend.BackendControlPatch;
 import dev.nulli0n.vbot.backend.BackendControlResult;
 import dev.nulli0n.vbot.backend.BackendControlService;
@@ -76,6 +79,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private volatile BotManager manager;
     private volatile ManagedBotStore managedBotStore;
     private volatile PluginMessages messages;
+    private volatile AddonLoader addonLoader;
     private final ConcurrentMap<String, ScheduledTask> followTasks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> scheduledActions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> presenceTasks = new ConcurrentHashMap<>();
@@ -138,9 +142,11 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startPrometheus(manager, config);
             startTabIntegration(manager, generation);
             Bots4VeloApiProvider.register(this);
+            loadAddons();
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
+            closeAddons();
             cancelRuntimeServicesForReload();
             VelocityBackendControlService control = backendControlClient;
             backendControlClient = null;
@@ -170,6 +176,27 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         CommandManager commandManager = proxy.getCommandManager();
         CommandMeta meta = commandManager.metaBuilder("vbot").plugin(this).build();
         commandManager.register(meta, new VBotCommand(this, backendControl));
+    }
+
+    private void loadAddons() {
+        AddonLoader loader = new AddonLoader(dataDirectory, new CoreAddonBotService(this, proxy),
+            new Slf4jAddonLogger(logger), BuildConstants.VERSION);
+        addonLoader = loader;
+        try {
+            int count = loader.loadAll();
+            logger.info("bots4velo loaded {} addon(s)", count);
+        }
+        catch (IOException failure) {
+            logger.error("Could not scan the bots4velo addon directory", failure);
+        }
+    }
+
+    private void closeAddons() {
+        AddonLoader loader = addonLoader;
+        addonLoader = null;
+        if (loader != null) {
+            bestEffort("addon loader", loader::close);
+        }
     }
 
     /**
@@ -472,6 +499,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     public synchronized void onShutdown(ProxyShutdownEvent event) {
         shuttingDown = true;
         reloadHandoffUsernames = Set.of();
+        closeAddons();
         Bots4VeloApiProvider.clear(this);
         cancelRuntimeServicesForReload();
         VelocityBackendControlService control = backendControlClient;
