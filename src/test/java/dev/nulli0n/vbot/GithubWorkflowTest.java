@@ -36,9 +36,9 @@ class GithubWorkflowTest {
         assertThat(integration).contains("bots4velo-integration/3.0.0");
         assertThat(readme)
             .contains("[中文文档 / Chinese documentation](README.zh-CN.md)")
-            .contains("bots4velo-3.0.0.jar")
-            .contains("bots4velo-paper-3.0.0.jar")
-            .contains("git tag v3.0.0")
+            .contains("`bots4velo.jar`")
+            .contains("`bots4velo-paper.jar`")
+            .contains("git tag vX.0.0")
             .contains("/vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]")
             .contains("templates: {}")
             .contains("bots: {}")
@@ -48,7 +48,7 @@ class GithubWorkflowTest {
             .contains("Unknown protocol detection backend: afk")
             .contains("AuthMeUI 1.3.4")
             .contains("/vbot reload --check")
-            .contains("git push origin v3.0.0");
+            .contains("git push origin vX.0.0");
         assertThat(chineseReadme).contains("[English documentation](README.md)");
     }
 

@@ -32,7 +32,7 @@ Bots4Velo 是一个运行在 Velocity 内的多协议无界面 Minecraft 客户�
 
 ### 只使用机器人连接功能
 
-1. 将 `bots4velo.jar` 放入 Velocity 的 `plugins` 目录。
+1. 将最新的 `bots4velo.jar` 发布包放入 Velocity 的 `plugins` 目录。
 2. 启动一次 Velocity，让它生成：
 
    - `plugins/bots4velo/config.yml`
@@ -212,7 +212,7 @@ Bots4Velo 不默认允许所有玩家控制机器人。使用 LuckPerms 时，�
 
 ## AuthMe 与 AuthMeUI
 
-Bots4Velo 3.0.0 支持：
+Bots4Velo 支持：
 
 - AuthMe/AuthMeReloaded 的 `/login`、`/register` 聊天流程；
 - AuthMe 6 原生 Dialog；
@@ -346,28 +346,28 @@ Paper 伴侣启用后，可以控制真实服务端属性：
 Windows：
 
 ```powershell
-.\gradlew.bat clean test shadowJar -PpluginVersion=3.0.0
+.\gradlew.bat clean test shadowJar
 ```
 
 Linux：
 
 ```bash
 chmod +x gradlew
-./gradlew clean test shadowJar -PpluginVersion=3.0.0
+./gradlew clean test shadowJar
 ```
 
 产物：
 
-- `build/libs/bots4velo-3.0.0.jar`：Velocity 插件；
-- `build/libs/bots4velo-paper-3.0.0.jar`：Paper 伴侣插件。
+- `build/libs/bots4velo-<version>.jar`：Velocity 插件；
+- `build/libs/bots4velo-paper-<version>.jar`：Paper 伴侣插件。
 
 ## CI 与 GitHub Release
 
 普通 commit/PR 使用独立 CI 执行测试与构建。只有大版本标签 `vX.0.0` 会创建 Release，例如：
 
 ```bash
-git tag v3.0.0
-git push origin v3.0.0
+git tag vX.0.0
+git push origin vX.0.0
 ```
 
 工作流会使用 Java 21，执行测试、构建、上传 artifact，并通过 GitHub Release 附件发布 JAR 和校验文件。次版本和修订版本标签不会触发大版本发布。
@@ -383,4 +383,4 @@ git push origin v3.0.0
 
 ## 版本范围
 
-3.0.0 是当前功能版本。后续仅进行安全、兼容性和错误修复，不再继续扩展新的大功能。
+当前功能线已经完成。后续仅进行安全、兼容性和错误修复，不再继续扩展新的大功能。

@@ -1,4 +1,4 @@
-# Bots4Velo 3.0.0
+# Bots4Velo
 
 [中文文档 / Chinese documentation](README.zh-CN.md)
 
@@ -32,7 +32,7 @@ The screenshots are illustrative only. Server-authoritative invulnerability, gam
 
 ### Bot connections only
 
-1. Put `bots4velo-3.0.0.jar` in Velocity's `plugins` directory.
+1. Put the latest `bots4velo.jar` release in Velocity's `plugins` directory.
 2. Start Velocity once. It creates:
 
    - `plugins/bots4velo/config.yml`
@@ -46,7 +46,7 @@ The screenshots are illustrative only. Server-authoritative invulnerability, gam
 
 To use invulnerability, game mode, AFK properties, or respawn points:
 
-1. Install `bots4velo-paper-3.0.0.jar` in the `plugins` directory of every target Paper backend.
+1. Install the matching `bots4velo-paper.jar` release in the `plugins` directory of every target Paper backend.
 2. Use the same shared secret on Velocity and every Paper backend. The decoded secret must be at least 32 bytes.
 3. Prefer an environment variable:
 
@@ -210,7 +210,7 @@ Use `all`, `@group:<name>`, `@tag:<name>`, `@server:<name>`, or the short form `
 
 ## AuthMe and AuthMeUI
 
-Bots4Velo 3.0.0 supports:
+Bots4Velo supports:
 
 - AuthMe/AuthMeReloaded `/login` and `/register` chat flows;
 - AuthMe 6 native Dialogs;
@@ -344,28 +344,28 @@ Common states:
 Windows:
 
 ```powershell
-.\gradlew.bat clean test shadowJar -PpluginVersion=3.0.0
+.\gradlew.bat clean test shadowJar
 ```
 
 Linux:
 
 ```bash
 chmod +x gradlew
-./gradlew clean test shadowJar -PpluginVersion=3.0.0
+./gradlew clean test shadowJar
 ```
 
 Artifacts:
 
-- `build/libs/bots4velo-3.0.0.jar`: Velocity plugin;
-- `build/libs/bots4velo-paper-3.0.0.jar`: Paper companion.
+- `build/libs/bots4velo-<version>.jar`: Velocity plugin;
+- `build/libs/bots4velo-paper-<version>.jar`: Paper companion.
 
 ## CI and GitHub Releases
 
 Normal commits and pull requests use a separate CI workflow for tests and builds. Only major tags matching `vX.0.0` create a release, for example:
 
 ```bash
-git tag v3.0.0
-git push origin v3.0.0
+git tag vX.0.0
+git push origin vX.0.0
 ```
 
 The workflow uses Java 21, runs tests and builds, uploads an artifact, and attaches the JARs and checksums to the GitHub Release. Minor and patch tags do not trigger the major-release workflow.
@@ -381,4 +381,4 @@ The workflow uses Java 21, runs tests and builds, uploads an artifact, and attac
 
 ## Version scope
 
-3.0.0 is the current feature version. Future changes are limited to security, compatibility, and bug fixes; no new feature iteration is planned.
+The current feature line is complete. Future changes are limited to security, compatibility, and bug fixes; no new feature iteration is planned.
