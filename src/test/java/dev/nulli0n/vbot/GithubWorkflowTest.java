@@ -38,17 +38,15 @@ class GithubWorkflowTest {
             .contains("bots4velo-paper-3.0.0.jar")
             .contains("git tag v3.0.0")
             .contains("/vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]")
-            .contains("reconnect.stable-reset-seconds")
-            .contains("/vbot list @farm --state PLAY --server survival --page 2")
-            .contains("/vbot queue @server:lobby --page 1")
-            .contains("/vbot hold @farm --ttl 30m")
-            .contains("/vbot resume @farm")
+            .contains("templates: {}")
+            .contains("bots: {}")
+            .contains("/vbot create Farm01 AFK_Farm01 secret:farm01 survival")
+            .contains("/vbot create Observer AFK_Observer - lobby")
+            .contains("bots4velo.create")
+            .contains("Unknown protocol detection backend: afk")
+            .contains("AuthMeUI 1.3.4")
             .contains("/vbot reload --check")
-            .contains("registration-second-argument: AUTO")
-            .contains("`CONFIRMATION`")
-            .contains("`EMAIL_OPTIONAL`")
-            .contains("`EMAIL_MANDATORY`")
-            .contains("configuration/pre-join");
+            .contains("git push origin v3.0.0");
     }
 
     @Test

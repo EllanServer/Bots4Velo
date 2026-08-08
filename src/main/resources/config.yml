@@ -1,40 +1,42 @@
-# bots4velo multi-protocol headless client
-# Start with enabled: false, finish the endpoint/auth settings, then enable one bot.
+# Bots4Velo multi-protocol headless client
+#
+# This starter configuration intentionally contains no bots.
+# Create persistent bots in-game with:
+#   /vbot create <id> <username> <secret:name|env:NAME|-> [target-server|-]
+#
+# A newly created bot is saved to managed-bots.yml. Passwords stay in
+# plugins/bots4velo/secrets.yml or in the Velocity process environment.
 
 proxy:
   address: "127.0.0.1"
   port: 25565
-  # Hostname and port written into the Minecraft handshake. This matters when
-  # Velocity forced-host routing is enabled.
+  # The host and port written into the Minecraft handshake.
   virtual-host: "localhost"
   virtual-port: 25565
-  # AUTO is recommended. Per bot it first pings protocol-detection-server, or
-  # target-server when the former is empty. Only bots with neither value fall
-  # back to the proxy Status response. This avoids selecting Velocity's newest
-  # advertised protocol when an older backend is the actual destination.
-  # Manual values: 1.16.5, 1.21.11, 26.1.2, 26.2.
+  # AUTO pings the selected backend. Manual values: 1.16.5, 1.21.11,
+  # 26.1.2 or 26.2.
   protocol-version: "AUTO"
   protocol-detection-timeout-ms: 3000
 
 runtime:
   auto-start-delay-ms: 3000
-  # Hard safety cap across config.yml and runtime-created managed bots.
+  # Hard cap for static bots plus bots created with /vbot create.
   maximum-bots: 32
-  # Applies to automatic starts and /vbot start|reconnect|create, preventing a
-  # login burst from flooding Velocity or the authentication server.
+  # Global connection and command rate limits.
   spawn-interval-ms: 1500
   command-interval-ms: 750
   resource-pack-step-delay-ms: 150
   resource-pack-mode: "ACCEPT_WITHOUT_DOWNLOAD"
   auto-respawn: true
-  # Enables authenticated requests to the optional Bots4Velo Paper backend
-  # companion. Prefer secret-env; when both are populated the environment
-  # value takes precedence. Keep disabled until every target backend is ready.
+
+  # Optional authenticated control of the Bots4Velo Paper companion.
+  # Keep disabled until the companion is installed on every target backend.
   backend-control:
     enabled: false
     secret: ""
     secret-env: ""
     timeout-ms: 3000
+
   reconnect:
     initial-delay-ms: 5000
     maximum-delay-ms: 60000
@@ -42,140 +44,19 @@ runtime:
     jitter: 0.15
     # Zero means retry forever.
     maximum-attempts: 0
-    # Reset consecutive reconnect attempts only after authentication completes
-    # and the bot remains continuously in PLAY for this many seconds. Zero
-    # resets immediately after both conditions are met.
+    # Reset a finite retry budget only after authenticated PLAY is stable.
     stable-reset-seconds: 30
-  # Repeat a start, stop, reconnect or server switch without a console task.
+
+  # Optional scheduled actions, webhooks, presence rules and Prometheus.
   schedules: []
-  # Optional JSON webhook receiving lifecycle events. Empty disables it.
   webhook-url: ""
-  # Optional Prometheus endpoint. Set a non-zero port to expose /metrics.
-  # Keep the default loopback address unless a monitoring network is trusted.
   prometheus-address: "127.0.0.1"
   prometheus-port: 0
-  # Keep bots on an otherwise empty backend, then stop them when people join.
   presence-rules: []
-  # Example:
-  # - id: keep-lobby-warm
-  #   server: lobby
-  #   selector: "@group:lobby"
-  #   minimum-bots: 1
-  #   maximum-humans: 0
-  #   interval-ms: 30000
-  # Example:
-  # - id: nightly-farm-reconnect
-  #   action: reconnect
-  #   selector: "@group:farm"
-  #   # Either use a relative interval, or run every day at a server-local
-  #   # wall-clock time. Quote HH:mm so YAML preserves the value as text.
-  #   at: "03:00"
-  #   timezone: "Asia/Singapore"
 
-# Templates are merged in order; bot fields always override template fields.
-# Put passwords in plugins/bots4velo/secrets.yml or a password-env variable
-# instead of committing them here.
-templates:
-  authme-farm:
-    groups: [farm]
-    tags: [afk, authme]
-    protocol-version: "AUTO"
-    render-distance: 2
-    auth:
-      mode: "AUTO"
-      login-command: "login {password}"
-      register-command: "register {password} {password}"
-      login-delay-ms: 1000
-      fallback-register-delay-ms: 2500
-      after-auth-delay-ms: 1500
-      # Stop with an explicit AUTH_TIMEOUT event rather than retrying forever
-      # when an authentication plugin never completes the login flow. Zero disables it.
-      timeout-ms: 30000
-      # Exact support for TejasLamba2006/AuthMeUI's native Paper dialogs.
-      # Rules are accepted only when this explicit switch is true. Configure an
-      # email only when AuthMe's registration second argument requires one.
-      authmeui:
-        accept-rules: true
-        registration-email: ""
-        # AUTO infers the second registration field from AuthMeUI. Set this
-        # explicitly when a customized label no longer identifies its purpose.
-        registration-second-argument: "AUTO" # AUTO, CONFIRMATION, EMAIL_OPTIONAL or EMAIL_MANDATORY
-        # Modern clients wait this long after first entering PLAY so a native UI
-        # can arrive before chat-command authentication begins. 1.16.5 ignores it.
-        ui-detection-grace-ms: 3000
-      login-prompts:
-        - "(?i)(please login|/login|请登录|请输入密码)"
-      register-prompts:
-        - "(?i)(please register|/register|请注册)"
-      success-messages:
-        - "(?i)(account registered successfully|successfully registered|logged in successfully|login successful|successful login|successfully logged|logged-in due to session reconnection|login session continued|already logged in|^authenticated$|登录成功|注册成功|认证成功)"
-      # Stop rather than retry forever when an account needs human action.
-      failure-messages:
-        - "(?i)(incorrect password|wrong password|invalid password|captcha|2fa|two-factor|verification code|banned|blacklisted)"
+# Optional templates for hand-written static bots. Runtime-created bots use
+# the safe defaults from /vbot create and are stored in managed-bots.yml.
+templates: {}
 
-bots:
-  IronFarm01:
-    template: authme-farm
-    enabled: false
-    username: "AFK_Iron01"
-    # Applied only when TAB is installed. tab-group is a temporary TAB group
-    # and %bots4velo_tab_group% can be used in TAB's own formatting rules.
-    display-name: "&eIron Farm Bot"
-    tab-group: "farm-bots"
-    # Choose exactly one: password, password-env or password-secret.
-    password-secret: "iron-farm-01"
-    target-server: "survival"
-    # AUTO detection pings this registered Velocity backend directly. Empty uses
-    # target-server; if both are empty it falls back to the proxy Status response.
-    protocol-detection-server: ""
-    server-switch-command: "server {server}"
-    # Retry interval and post-confirmation settle time before after-login commands.
-    # A retry is sent until a second PLAY transition proves the backend switch.
-    server-switch-delay-ms: 3000
-    # Zero retries forever. After-login commands never run before confirmation.
-    server-switch-maximum-attempts: 0
-    after-login-commands:
-      - "res tp ironfarm"
-    # Server-authoritative player properties require the optional Paper
-    # companion above. These safe defaults leave every property unchanged.
-    player-state:
-      # NONE leaves the AFK flags below unchanged. SAFE enables invulnerability
-      # and sleep ignoring while disabling pickup and collision. FARM also
-      # enables affects-spawning. NORMAL explicitly restores ordinary values.
-      # Explicit fields below always override the selected preset.
-      afk-preset: "NONE" # NONE, SAFE, FARM or NORMAL
-      # Uncomment only the individual fields that should override the preset.
-      # invulnerable: "KEEP" # KEEP, ENABLED or DISABLED
-      # sleep-ignored: "KEEP" # KEEP, ENABLED or DISABLED
-      # affects-spawning: "KEEP" # KEEP, ENABLED or DISABLED
-      # pickup-items: "KEEP" # KEEP, ENABLED or DISABLED
-      # collidable: "KEEP" # KEEP, ENABLED or DISABLED
-      game-mode: "KEEP" # KEEP, SURVIVAL, CREATIVE, ADVENTURE or SPECTATOR
-      apply-delay-ms: 0
-      respawn-point:
-        # UNCHANGED, CURRENT, FIXED, WORLD_SPAWN or CLEAR.
-        # FIXED additionally requires world and uses the coordinates below.
-        mode: "UNCHANGED"
-        world: ""
-        x: 0.0
-        y: 0.0
-        z: 0.0
-        yaw: 0.0
-    behavior:
-      # STATIC, FARM, PATROL, COMMAND or FOLLOW. FOLLOW needs a player target
-      # supplied at runtime; it remains idle until one is configured.
-      mode: "FARM"
-      enabled: false
-      interval-ms: 5000
-      movement-radius: 0.0
-      yaw-step: 20.0
-      random-yaw: false
-      jump: false
-      swing: false
-      sneak: false
-      # PATROL may use absolute points. server-cycle rotates servers after the
-      # configured number of behavior cycles (zero disables it).
-      path: []
-      server-cycle: []
-      server-cycle-every: 0
-      follow-player: ""
+# Deliberately empty: use /vbot create instead of editing this section.
+bots: {}

@@ -6,6 +6,7 @@ run/
 *.iml
 *.log
 *.pid
+**/plugins/bots4velo/secrets.yml
 test-network/
 .integration-network/
 .integration-network-local/

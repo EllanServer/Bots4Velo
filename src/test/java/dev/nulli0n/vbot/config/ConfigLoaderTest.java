@@ -601,34 +601,17 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void bundledConfigAllowsChangingOnlyTheAfkPreset() throws IOException {
+    void bundledConfigStartsWithoutStaticBots() throws IOException {
         String bundled;
         try (InputStream stream = ConfigLoaderTest.class.getClassLoader().getResourceAsStream("config.yml")) {
             assertThat(stream).isNotNull();
             bundled = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }
-        BotPluginConfig config = parse(bundled
-            .replace("afk-preset: \"NONE\"", "afk-preset: \"FARM\"")
-            .replace("password-secret: \"iron-farm-01\"", "password: \"secret\""));
+        BotPluginConfig config = parse(bundled);
 
-        BotPluginConfig.PlayerStateConfig farm = config.bots().get("ironfarm01").playerState();
-        assertThat(config.bots().get("ironfarm01").auth()).satisfies(auth -> {
-            assertThat(auth.acceptRules()).isTrue();
-            assertThat(auth.registrationEmail()).isBlank();
-            assertThat(auth.registrationSecondArgument())
-                .isEqualTo(BotPluginConfig.RegistrationSecondArgument.AUTO);
-            assertThat(auth.uiDetectionGraceMillis()).isEqualTo(3_000L);
-            assertThat(auth.successMessages()).anySatisfy(expression ->
-                assertThat(java.util.regex.Pattern.compile(expression)
-                    .matcher("Logged-in due to Session Reconnection.").find())
-                    .isTrue());
-        });
-        assertThat(farm.afkPreset()).isEqualTo(BotPluginConfig.AfkPreset.FARM);
-        assertThat(farm.invulnerability()).isEqualTo(BotPluginConfig.InvulnerabilityMode.ENABLED);
-        assertThat(farm.sleepingIgnored()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
-        assertThat(farm.affectsSpawning()).isEqualTo(BotPluginConfig.ManagedFlag.ENABLED);
-        assertThat(farm.pickupItems()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
-        assertThat(farm.collidable()).isEqualTo(BotPluginConfig.ManagedFlag.DISABLED);
+        assertThat(config.bots()).isEmpty();
+        assertThat(config.runtime().maximumBots()).isEqualTo(32);
+        assertThat(config.runtime().backendControl().enabled()).isFalse();
     }
 
     @Test
