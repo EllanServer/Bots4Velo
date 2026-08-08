@@ -339,6 +339,26 @@ Common states:
 - `protocol=auto/pending`: automatic detection is not complete; check backend reachability;
 - `FAILED`: authentication failure, CAPTCHA, 2FA, ban, or retry budget exhaustion; fix the account and run `start` or `reconnect` manually.
 
+## Addons
+
+Independent addons live in one directory per addon:
+
+```text
+plugins/bots4velo/addons/<addon-name>/
+  addon.jar
+  config.yml
+```
+
+The JAR must provide `dev.nulli0n.vbot.addon.api.Bots4VeloAddon` through
+`META-INF/services`. Each bundle receives an isolated class loader, its own data directory,
+a scoped logger, and the stable `AddonBotService` API for lifecycle, server switching,
+online-player checks, messages, and bot events. An addon failure is isolated and does not
+prevent Bots4Velo from starting.
+
+Addon JARs are loaded during proxy startup and unloaded during proxy shutdown. Replacing an
+addon JAR requires a Velocity restart; `/vbot reload` intentionally reloads bot
+configuration without replacing addon class loaders.
+
 ## Build
 
 Windows:
