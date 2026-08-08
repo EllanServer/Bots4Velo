@@ -21,6 +21,7 @@ class GithubWorkflowTest {
         String verifier = Files.readString(Path.of("scripts/verify-local-integration.ps1"));
         String integration = Files.readString(Path.of("scripts/ci/run-network-integration.sh"));
         String readme = Files.readString(Path.of("README.md"));
+        String chineseReadme = Files.readString(Path.of("README.zh-CN.md"));
 
         assertThat(build).contains("orElse(\"3.0.0\")");
         assertThat(build)
@@ -34,6 +35,7 @@ class GithubWorkflowTest {
         assertThat(verifier).contains("$ExpectedPluginVersion = \"3.0.0\"");
         assertThat(integration).contains("bots4velo-integration/3.0.0");
         assertThat(readme)
+            .contains("[中文文档 / Chinese documentation](README.zh-CN.md)")
             .contains("bots4velo-3.0.0.jar")
             .contains("bots4velo-paper-3.0.0.jar")
             .contains("git tag v3.0.0")
@@ -47,6 +49,7 @@ class GithubWorkflowTest {
             .contains("AuthMeUI 1.3.4")
             .contains("/vbot reload --check")
             .contains("git push origin v3.0.0");
+        assertThat(chineseReadme).contains("[English documentation](README.md)");
     }
 
     @Test
