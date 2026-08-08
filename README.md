@@ -4,6 +4,17 @@ Bots4Velo 是一个运行在 Velocity 内的多协议无界面 Minecraft 客户�
 
 默认配置是安全的：**首次安装不会启动任何机器人**。管理员或获授权的玩家通过 `/vbot create` 创建机器人；创建记录保存在 `managed-bots.yml`，密码只保存在独立密钥文件或环境变量中。
 
+## 效果展示
+
+以下截图来自实际挂机场景，展示机器人在保护结构中保持在线，以及玻璃防护挂机点的使用方式：
+
+<p align="center">
+  <img src="docs/images/afk-enclosure.png" alt="机器人在下界砖挂机结构中保持在线" width="48%" />
+  <img src="docs/images/afk-glass-shelter.png" alt="机器人在玻璃防护挂机点保持在线" width="48%" />
+</p>
+
+截图只用于说明使用场景；无敌、游戏模式和重生点等服务端属性需要安装可选的 Paper 伴侣插件。
+
 ## 支持的协议
 
 | 配置值 | 协议号 | 适配器 |
