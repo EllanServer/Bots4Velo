@@ -1,6 +1,7 @@
 rootProject.name = "Bots4Velo"
 
 include(
+    "addon-api",
     "backend-protocol",
     "paper-companion",
     "transport-api",
