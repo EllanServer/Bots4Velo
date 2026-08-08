@@ -1,4 +1,4 @@
-# Bots4Velo 3.0.0
+# Bots4Velo 
 
 Bots4Velo 是一个运行在 Velocity 内的多协议无界面 Minecraft 客户端。它可以让机器人保持在线、自动认证、切换后端、执行挂机行为，并可选地通过 Paper 伴侣插件修改无敌、游戏模式和重生点。
 
@@ -30,7 +30,7 @@ Bots4Velo 是一个运行在 Velocity 内的多协议无界面 Minecraft 客户�
 
 ### 只使用机器人连接功能
 
-1. 将 `bots4velo-3.0.0.jar` 放入 Velocity 的 `plugins` 目录。
+1. 将 `bots4velo.jar` 放入 Velocity 的 `plugins` 目录。
 2. 启动一次 Velocity，让它生成：
 
    - `plugins/bots4velo/config.yml`
@@ -44,7 +44,7 @@ Bots4Velo 是一个运行在 Velocity 内的多协议无界面 Minecraft 客户�
 
 如果需要无敌、游戏模式、挂机属性或重生点：
 
-1. 将 `bots4velo-paper-3.0.0.jar` 安装到每一个目标 Paper 后端的 `plugins` 目录。
+1. 将 `bots4velo-paper.jar` 安装到每一个目标 Paper 后端的 `plugins` 目录。
 2. Velocity 与所有 Paper 后端使用同一个至少 32 字节的共享密钥。
 3. 推荐通过环境变量设置密钥：
 
