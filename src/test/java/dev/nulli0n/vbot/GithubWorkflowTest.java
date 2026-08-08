@@ -16,14 +16,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class GithubWorkflowTest {
     @Test
-    void releaseDefaultsArePreparedForVersion300() throws Exception {
+    void releaseDefaultsArePreparedForVersion301() throws Exception {
         String build = Files.readString(Path.of("build.gradle.kts"));
         String verifier = Files.readString(Path.of("scripts/verify-local-integration.ps1"));
         String integration = Files.readString(Path.of("scripts/ci/run-network-integration.sh"));
         String readme = Files.readString(Path.of("README.md"));
         String chineseReadme = Files.readString(Path.of("README.zh-CN.md"));
 
-        assertThat(build).contains("orElse(\"3.0.0\")");
+        assertThat(build).contains("orElse(\"3.0.1\")");
         assertThat(build)
             .contains("\":transport-api:check\"")
             .contains("\":backend-protocol:check\"")
@@ -32,8 +32,8 @@ class GithubWorkflowTest {
             .contains("\":adapters:modern-1_21_11:check\"")
             .contains("\":adapters:modern-26_1:check\"")
             .contains("\":adapters:modern-26_2:check\"");
-        assertThat(verifier).contains("$ExpectedPluginVersion = \"3.0.0\"");
-        assertThat(integration).contains("bots4velo-integration/3.0.0");
+        assertThat(verifier).contains("$ExpectedPluginVersion = \"3.0.1\"");
+        assertThat(integration).contains("bots4velo-integration/3.0.1");
         assertThat(readme)
             .contains("[中文文档 / Chinese documentation](README.zh-CN.md)")
             .contains("`bots4velo.jar`")

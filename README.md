@@ -359,6 +359,18 @@ Addon JARs are loaded during proxy startup and unloaded during proxy shutdown. R
 addon JAR requires a Velocity restart; `/vbot reload` intentionally reloads bot
 configuration without replacing addon class loaders.
 
+## Common bot API
+
+The recent addon merge also keeps a separate convenience API for common integrations.
+`dev.nulli0n.vbot.api.common.CommonBotApi` supports selector-based batch controls such as
+`all`, `@group:farm`, `@tag:lobby`, and `@server:survival`, plus commands, movement,
+behavior controls, following, server switching, and normalized events. Obtain it after
+proxy initialization with `CommonBotApiProvider.get()`.
+
+The original `Bots4VeloApi` and addon SPI are unchanged. See [`docs/api.md`](docs/api.md)
+and [`docs/project-structure.md`](docs/project-structure.md) for the API example and the
+non-breaking package layout.
+
 ## Build
 
 Windows:

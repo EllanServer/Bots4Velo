@@ -4,7 +4,7 @@ on:
   push:
     tags:
       # GitHub's glob syntax applies + to the previous character class. This
-      # matches numeric vX.0.0 tags (for example v3.0.0), but not vX.1.0 or
+      # matches numeric vX.0.0 tags, but not vX.1.0 or
       # vX.0.1.
       - "v[0-9]+.0.0"
 

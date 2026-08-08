@@ -24,6 +24,9 @@ import dev.nulli0n.vbot.bot.BotEvent;
 import dev.nulli0n.vbot.bot.MaintenanceHoldSnapshot;
 import dev.nulli0n.vbot.api.Bots4VeloApi;
 import dev.nulli0n.vbot.api.Bots4VeloApiProvider;
+import dev.nulli0n.vbot.api.common.CommonBotApi;
+import dev.nulli0n.vbot.api.common.CommonBotApiProvider;
+import dev.nulli0n.vbot.api.common.CoreCommonBotApi;
 import dev.nulli0n.vbot.addon.AddonLoader;
 import dev.nulli0n.vbot.addon.CoreAddonBotService;
 import dev.nulli0n.vbot.addon.Slf4jAddonLogger;
@@ -80,6 +83,7 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
     private volatile ManagedBotStore managedBotStore;
     private volatile PluginMessages messages;
     private volatile AddonLoader addonLoader;
+    private volatile CommonBotApi commonBotApi;
     private final ConcurrentMap<String, ScheduledTask> followTasks = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> scheduledActions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ScheduledTask> presenceTasks = new ConcurrentHashMap<>();
@@ -142,11 +146,17 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
             startPrometheus(manager, config);
             startTabIntegration(manager, generation);
             Bots4VeloApiProvider.register(this);
+            CommonBotApi convenienceApi = new CoreCommonBotApi(this);
+            commonBotApi = convenienceApi;
+            CommonBotApiProvider.register(convenienceApi);
             loadAddons();
             logger.info("bots4velo initialized with {} configured bot(s)", config.bots().size());
         }
         catch (Exception exception) {
             closeAddons();
+            CommonBotApiProvider.clear(commonBotApi);
+            commonBotApi = null;
+            Bots4VeloApiProvider.clear(this);
             cancelRuntimeServicesForReload();
             VelocityBackendControlService control = backendControlClient;
             backendControlClient = null;
@@ -500,6 +510,8 @@ public final class Bots4VeloPlugin implements Bots4VeloApi {
         shuttingDown = true;
         reloadHandoffUsernames = Set.of();
         closeAddons();
+        CommonBotApiProvider.clear(commonBotApi);
+        commonBotApi = null;
         Bots4VeloApiProvider.clear(this);
         cancelRuntimeServicesForReload();
         VelocityBackendControlService control = backendControlClient;

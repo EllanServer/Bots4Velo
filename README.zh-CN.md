@@ -341,6 +341,16 @@ Paper 伴侣启用后，可以控制真实服务端属性：
 - `protocol=auto/pending`：自动探测尚未完成，先检查目标后端可达性；
 - `FAILED`：认证失败、验证码、2FA、封禁或超出重试上限，需要修复账号后手动 `start` 或 `reconnect`。
 
+## 常用机器人 API
+
+项目同时提供独立的 `dev.nulli0n.vbot.api.common.CommonBotApi`，用于常见的批量操作。
+它支持 `all`、`@group:farm`、`@tag:lobby`、`@server:survival` 等选择器，以及启动、停止、
+重连、执行命令、移动、转头、跳跃、挥手、潜行、行为控制、跟随和跨服，并提供统一事件。
+Velocity 初始化完成后可通过 `CommonBotApiProvider.get()` 获取。
+
+原有 `Bots4VeloApi` 与 addon SPI 没有修改，旧插件不需要重新编译。详见
+[`docs/api.md`](docs/api.md) 和 [`docs/project-structure.md`](docs/project-structure.md)。
+
 ## 构建
 
 Windows：
