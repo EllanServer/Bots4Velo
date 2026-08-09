@@ -413,4 +413,7 @@ The workflow uses Java 21, runs tests and builds, uploads an artifact, and attac
 
 ## Version scope
 
-The current feature line is complete. Future changes are limited to security, compatibility, and bug fixes; no new feature iteration is planned.
+The current maintenance line is `3.0.x`. Every release uses a new semantic version;
+bug-fix releases increment the patch number (for example `3.0.1` -> `3.0.2`).
+The companion project follows the same rule independently (for example `1.0.0` -> `1.0.1`).
+Future work on this line is focused on reliability, compatibility, and bug fixes.

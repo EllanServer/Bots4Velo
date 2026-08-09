@@ -32,8 +32,10 @@ import org.geysermc.mcprotocollib.protocol.data.game.setting.ChatVisibility;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.ParticleStatus;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.SkinPart;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundResourcePackPushPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundPingPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundCustomClickActionPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundClientInformationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundPongPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundResourcePackPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundFinishConfigurationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundShowDialogConfigurationPacket;
@@ -344,6 +346,14 @@ final class ModernBotTransport implements BotTransport {
         }
         else if (packet instanceof ClientboundResourcePackPushPacket resourcePack) {
             handleResourcePack(source, resourcePack);
+        }
+        else if (packet instanceof ClientboundPingPacket ping) {
+            // Vulcan and similar anti-cheats use the common Ping/Pong pair as
+            // a confirmation packet.  MCProtocolLib's default client listener
+            // handles KeepAlive, but intentionally leaves this packet to the
+            // application.  A headless client must answer it or the backend
+            // will disconnect the bot after the no-response timeout.
+            source.send(new ServerboundPongPacket(ping.getId()));
         }
         else if (packet instanceof ClientboundPlayerPositionPacket position) {
             acknowledgeTeleport(source, position);

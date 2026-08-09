@@ -20,11 +20,13 @@ import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlaye
 import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerSwingArmPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.player.ClientPlayerStatePacket;
 import com.github.steveice10.mc.protocol.packet.ingame.client.world.ClientTeleportConfirmPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.client.window.ClientConfirmTransactionPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerChatPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerJoinGamePacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.ServerResourcePackSendPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.entity.player.ServerPlayerHealthPacket;
 import com.github.steveice10.mc.protocol.packet.ingame.server.entity.player.ServerPlayerPositionRotationPacket;
+import com.github.steveice10.mc.protocol.packet.ingame.server.window.ServerConfirmTransactionPacket;
 import com.github.steveice10.packetlib.Session;
 import com.github.steveice10.packetlib.event.session.ConnectedEvent;
 import com.github.steveice10.packetlib.event.session.DisconnectedEvent;
@@ -196,6 +198,14 @@ final class LegacyBotTransport implements BotTransport {
         }
         else if (event.getPacket() instanceof ServerResourcePackSendPacket) {
             handleResourcePack(event.getSession());
+        }
+        else if (event.getPacket() instanceof ServerConfirmTransactionPacket confirmation) {
+            // Legacy servers and anti-cheats use the window transaction packet
+            // as a confirmation challenge.  Reply with the same transaction
+            // tuple so the server does not mistake this headless client for a
+            // stalled or invalid client.
+            event.getSession().send(new ClientConfirmTransactionPacket(
+                confirmation.getWindowId(), confirmation.getActionId(), confirmation.isAccepted()));
         }
         else if (event.getPacket() instanceof ServerPlayerPositionRotationPacket position) {
             acknowledgeTeleport(event.getSession(), position);
